@@ -228,35 +228,45 @@ if ! scp -i transcription-ec2.pem -o StrictHostKeyChecking=no -o Compression=yes
     exit 1
 fi
 
-echo "Running OPTIMIZED transcription..."
+echo "Using optimized transcription engine from AMI..."
 
-# Run optimized transcription using pre-compiled environment
+echo "Running transcription with transcribe_optimized.py..."
+
+# Upload diagnostic script
+echo "Uploading diagnostic tools..."
+scp -i transcription-ec2.pem -o StrictHostKeyChecking=no diagnostic_check.py ubuntu@$PUBLIC_IP:/tmp/
+
+# Run transcription with enhanced diagnostics
 ssh -i transcription-ec2.pem -o StrictHostKeyChecking=no ubuntu@$PUBLIC_IP << EOF
+set -e
 
-# Verify optimized environment is ready
-echo "Verifying optimized environment..."
-if [ ! -f /opt/transcribe/cache/cache_info.json ]; then
-    echo "WARNING: Optimized cache not found, using non-optimized transcription"
-    
-    # Fallback: Run optimized script anyway (it will work without pre-compiled kernels)
-    source /opt/transcribe/venv/bin/activate
-    cd /opt/transcribe
-    python scripts/transcribe_optimized.py /home/ubuntu/$AUDIO_FILE
-else
-    echo "OPTIMIZED environment detected!"
-    
-    # Activate optimized environment
-    source /opt/transcribe/venv/bin/activate
-    cd /opt/transcribe
-    
-    # Show optimization status
-    echo "Cache info:"
-    cat /opt/transcribe/cache/cache_info.json | grep -E "(kernels_compiled|timestamp)"
-    
-    # Run optimized transcription with pre-compiled kernels
-    echo "Starting OPTIMIZED transcription with pre-compiled kernels..."
-    python scripts/transcribe_optimized.py /home/ubuntu/$AUDIO_FILE
-fi
+echo "=================================================="
+echo "ENHANCED GPU TRANSCRIPTION WITH DIAGNOSTICS"
+echo "=================================================="
+
+# Run diagnostic check first
+echo "🔍 Running comprehensive environment diagnostics..."
+cd /opt/transcribe
+source venv/bin/activate
+
+# Copy and run diagnostic script
+cp /tmp/diagnostic_check.py .
+python diagnostic_check.py
+
+echo ""
+echo "=================================================="
+echo "STARTING TRANSCRIPTION WITH ENHANCED LOGGING"
+echo "=================================================="
+
+# Run transcription with enhanced logging
+echo "🚀 Starting enhanced transcription..."
+python scripts/transcribe_optimized.py /home/ubuntu/$AUDIO_FILE
+
+echo ""
+echo "=================================================="
+echo "TRANSCRIPTION COMPLETED"
+echo "=================================================="
+EOF
 
 echo ""
 echo "OPTIMIZED Performance Summary:"
@@ -273,24 +283,23 @@ echo "OPTIMIZED transcription completed!"
 EOF
 
 echo ""
-echo "Downloading optimized results..."
+echo "Downloading results..."
 
-# Download all result files
-scp -i transcription-ec2.pem -o StrictHostKeyChecking=no ubuntu@$PUBLIC_IP:/opt/transcribe/optimized_result_*.txt . 2>/dev/null || \
-scp -i transcription-ec2.pem -o StrictHostKeyChecking=no ubuntu@$PUBLIC_IP:/opt/transcribe/result_*.txt . 2>/dev/null
+# Download result files created by transcribe_optimized.py
+scp -i transcription-ec2.pem -o StrictHostKeyChecking=no ubuntu@$PUBLIC_IP:/opt/transcribe/optimized_result_*.txt . 2>/dev/null
 
 # Upload to S3 with optimized naming
-if ls optimized_result_*.txt >/dev/null 2>&1 || ls result_*.txt >/dev/null 2>&1; then
+if ls optimized_result_*.txt >/dev/null 2>&1; then
     echo "Uploading to S3..."
     TIMESTAMP=$(date +%Y%m%d_%H%M%S)
     
-         # Try optimized results first
-     for result_file in optimized_result_*.txt result_*.txt; do
-         if [ -f "$result_file" ]; then
-             aws s3 cp "$result_file" "s3://transcription-curevo/transcription_${TIMESTAMP}.txt" 2>/dev/null
-             if [ $? -eq 0 ]; then
-                 echo "SUCCESS: Results uploaded to S3!"
-                 echo "View: https://transcription-curevo.s3.eu-north-1.amazonaws.com/transcription_${TIMESTAMP}.txt"
+    # Upload the most recent result file
+    for result_file in optimized_result_*.txt; do
+        if [ -f "$result_file" ]; then
+            aws s3 cp "$result_file" "s3://transcription-curevo/transcription_${TIMESTAMP}.txt" 2>/dev/null
+            if [ $? -eq 0 ]; then
+                echo "SUCCESS: Results uploaded to S3!"
+                echo "View: https://transcription-curevo.s3.eu-north-1.amazonaws.com/transcription_${TIMESTAMP}.txt"
             else
                 echo "WARNING: S3 upload failed - check credentials"
             fi
@@ -307,19 +316,19 @@ MINUTES=$((TOTAL_TIME / 60))
 SECONDS=$((TOTAL_TIME % 60))
 
 echo ""
-echo "OPTIMIZED Lightning Transcription Complete!"
-echo "==========================================="
+echo "GPU Transcription Complete!"
+echo "=========================="
 echo "Total runtime: ${MINUTES}m ${SECONDS}s"
 
-# Optimized success criteria
+# Success criteria
 if [ $TOTAL_TIME -le 90 ]; then
-    echo "SUCCESS: Under 90 seconds! (OPTIMIZED TARGET ACHIEVED)"
+    echo "SUCCESS: Under 90 seconds! (Excellent performance)"
 elif [ $TOTAL_TIME -le 120 ]; then
     echo "SUCCESS: Under 2 minutes! (Good performance)"
 elif [ $TOTAL_TIME -le 180 ]; then
     echo "SUCCESS: Under 3 minutes! (Standard performance)"
 else
-    echo "WARNING: Over 3 minutes (check optimization status)"
+    echo "WARNING: Over 3 minutes (check performance)"
 fi
 
 echo "Estimated cost: ~$0.01-0.02 (spot pricing)"
@@ -344,5 +353,5 @@ else
 fi
 
 echo ""
-echo "OPTIMIZED transcription session complete!"
-echo "Next transcription will be even faster if instance is reused!" 
+echo "GPU transcription session complete!"
+echo "Next transcription will be faster if instance is reused!" 

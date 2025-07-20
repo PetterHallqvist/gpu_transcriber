@@ -1,0 +1,21 @@
+[Unit]
+Description=GPU Transcription API Server
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/transcribe
+Environment=PATH=/opt/transcribe/venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONPATH=/opt/transcribe:/opt/transcribe/scripts
+Environment=CUDA_VISIBLE_DEVICES=0
+ExecStart=/opt/transcribe/venv/bin/python /opt/transcribe/scripts/api_server.py
+Restart=always
+RestartSec=30
+TimeoutStartSec=120
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target 

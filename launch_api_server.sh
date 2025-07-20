@@ -1,136 +1,74 @@
 #!/bin/bash
 
-# Launch Production Transcription API Server
-# Simple always-on EC2 instance serving transcription requests
-# Run once, use forever
+# Simple API Server Launcher
+# Target: 90 seconds from start to ready
+# Give up after: 3 minutes (if not working, something is wrong)
 
-echo "Launching Production Transcription API"
-echo "====================================="
+echo "🚀 Simple API Server Launcher"
+echo "============================"
+echo "Target: Ready in 90 seconds"
+echo "Give up after: 3 minutes"
+echo ""
 
+START_TIME=$(date +%s)
 export AWS_DEFAULT_REGION=eu-north-1
 
-# Cleanup function for graceful shutdown
-cleanup_on_error() {
-    echo ""
-    echo "Cleaning up on error..."
+# Simple logging with elapsed time
+log() {
+    local elapsed=$(($(date +%s) - START_TIME))
+    echo "[${elapsed}s] $1"
+}
+
+# Cleanup on any error or exit
+cleanup() {
     if [ ! -z "$INSTANCE_ID" ]; then
-        echo "Terminating failed instance: $INSTANCE_ID"
+        log "🧹 Cleaning up instance: $INSTANCE_ID"
         aws ec2 terminate-instances --instance-ids "$INSTANCE_ID" >/dev/null 2>&1
     fi
 }
+trap cleanup EXIT INT TERM
 
-# Set up signal traps
-trap cleanup_on_error EXIT INT TERM
-
-# Check AMI exists
+# Check prerequisites
+log "🔍 Checking prerequisites..."
 if [ ! -f ami_id.txt ]; then
-    echo "ERROR: AMI not found!"
-    echo "Please run: ./build_ami.sh first"
+    log "❌ ERROR: Run ./build_ami.sh first"
     exit 1
 fi
 
 AMI_ID=$(cat ami_id.txt)
-echo "Using AMI: $AMI_ID"
+log "✅ Using AMI: $AMI_ID"
 
-# Check if API server already running
-echo "Checking for existing API server..."
-EXISTING_API=$(aws ec2 describe-instances \
-    --filters "Name=instance-state-name,Values=running" \
-              "Name=tag:Name,Values=transcription-api" \
-    --query 'Reservations[0].Instances[0].InstanceId' \
-    --output text 2>/dev/null)
-
-if [ "$EXISTING_API" != "None" ] && [ ! -z "$EXISTING_API" ] && [ "$EXISTING_API" != "null" ]; then
-    echo "Found existing API server: $EXISTING_API"
-    
-    PUBLIC_IP=$(aws ec2 describe-instances \
-        --instance-ids $EXISTING_API \
-        --query 'Reservations[0].Instances[0].PublicIpAddress' \
-        --output text)
-    
-    echo ""
-    echo "🚀 API Server Already Running!"
-    echo "=============================="
-    echo "Instance ID: $EXISTING_API"
-    echo "Public IP: $PUBLIC_IP"
-    echo "API URL: http://$PUBLIC_IP:8000/transcribe"
-    echo "Health Check: http://$PUBLIC_IP:8000/health"
-    echo ""
-    echo "Test with:"
-    echo "curl -X POST -F 'audio=@your_file.mp3' http://$PUBLIC_IP:8000/transcribe"
-    
-    # Save instance ID for future reference
-    echo "$EXISTING_API" > api_instance_id.txt
-    
-    # Clear trap since we're not creating a new instance
-    trap - EXIT
-    exit 0
-fi
-
-echo "No existing API server found. Launching new instance..."
-
-# Try multiple zones for best availability
-ZONES=("eu-north-1a" "eu-north-1b" "eu-north-1c")
-INSTANCE_ID=""
-
-for zone in "${ZONES[@]}"; do
-    echo "Trying to launch API server in zone: $zone"
-    
-    INSTANCE_OUTPUT=$(aws ec2 run-instances \
-        --image-id "$AMI_ID" \
-        --instance-type "g4dn.xlarge" \
-        --key-name "transcription-ec2" \
-        --security-groups "transcription-g4dn-sg" \
-        --placement "AvailabilityZone=$zone" \
-        --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=transcription-api},{Key=Purpose,Value=api-server}]' \
-        --user-data "#!/bin/bash
+# For now, always launch a new server (skip existing check)
+log "🚀 Launching fresh API server..."
+INSTANCE_OUTPUT=$(aws ec2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "g4dn.xlarge" \
+    --key-name "transcription-ec2" \
+    --security-groups "transcription-g4dn-sg" \
+    --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=transcription-api}]' \
+    --user-data '#!/bin/bash
+exec 1> >(logger -s -t transcribe-api) 2>&1
+echo "[$(date)] Starting API server..."
 cd /opt/transcribe
 source venv/bin/activate
 sudo systemctl start transcribe-api
-echo 'API server startup completed' >> /var/log/transcribe-startup.log
-" \
-        --block-device-mappings '[
-            {
-                "DeviceName": "/dev/sda1",
-                "Ebs": {
-                    "VolumeSize": 30,
-                    "VolumeType": "gp3",
-                    "DeleteOnTermination": true
-                }
-            }
-        ]' \
-        --count 1 \
-        --output text \
-        --query 'Instances[0].InstanceId' 2>&1)
-    
-    INSTANCE_ID=$(echo "$INSTANCE_OUTPUT" | grep -v "^An error occurred" | head -1)
-    
-    if [ ! -z "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "None" ]; then
-        echo "SUCCESS: API server launched in zone: $zone"
-        echo "Instance ID: $INSTANCE_ID"
-        break
-    else
-        echo "FAILED: Could not launch in zone $zone"
-        if echo "$INSTANCE_OUTPUT" | grep -q "An error occurred"; then
-            echo "Error: $INSTANCE_OUTPUT"
-        fi
-        echo "Trying next zone..."
-    fi
-done
+echo "[$(date)] API server startup completed"
+' \
+    --count 1 \
+    --output text \
+    --query 'Instances[0].InstanceId' 2>&1)
 
-if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "None" ]; then
-    echo "ERROR: Failed to launch API server in any zone"
-    echo "This might be due to:"
-    echo "  - G and VT Instance quota exceeded (g4dn.xlarge uses this quota)"
-    echo "  - High demand in all zones"
-    echo "  - Try again in a few minutes"
+INSTANCE_ID=$(echo "$INSTANCE_OUTPUT" | head -1)
+
+if [ -z "$INSTANCE_ID" ] || echo "$INSTANCE_ID" | grep -q "error"; then
+    log "❌ Failed to launch instance: $INSTANCE_OUTPUT"
     exit 1
 fi
 
-# Save instance ID
-echo "$INSTANCE_ID" > api_instance_id.txt
+log "✅ Instance launched: $INSTANCE_ID"
 
-echo "Waiting for API server to start..."
+# Wait for instance to be running
+log "⏳ Waiting for instance to boot..."
 aws ec2 wait instance-running --instance-ids $INSTANCE_ID
 
 # Get public IP
@@ -139,46 +77,43 @@ PUBLIC_IP=$(aws ec2 describe-instances \
     --query 'Reservations[0].Instances[0].PublicIpAddress' \
     --output text)
 
-echo "API server booting up... waiting for Flask to start..."
+log "✅ Instance running at: $PUBLIC_IP"
 
-# Wait for API to be ready (Flask needs time to load model)
-echo "Waiting for API endpoint to respond..."
-API_READY=false
-for i in {1..60}; do
+# Wait for API to be ready (90 second target, 180 second timeout)
+log "⏳ Waiting for API server to start..."
+for i in {1..18}; do
+    elapsed=$(($(date +%s) - START_TIME))
+    log "Health check $i/18 (${elapsed}s elapsed)..."
+    
     if curl -s "http://$PUBLIC_IP:8000/health" >/dev/null 2>&1; then
-        API_READY=true
-        echo "API is ready!"
+        log "✅ API server is ready!"
         break
     fi
-    echo "Attempt $i/60: API starting up..."
+    
+    if [ $elapsed -gt 180 ]; then
+        log "❌ TIMEOUT: API not ready after 3 minutes"
+        log "🔍 Check logs: ssh -i transcription-ec2.pem ubuntu@$PUBLIC_IP 'sudo journalctl -u transcribe-api'"
+        exit 1
+    fi
+    
     sleep 10
 done
 
-if [ "$API_READY" = false ]; then
-    echo "WARNING: API health check failed, but instance is running"
-    echo "The model might still be loading. Give it a few more minutes."
-fi
+# Success!
+TOTAL_TIME=$(($(date +%s) - START_TIME))
+echo ""
+log "🎉 API Server Ready! (${TOTAL_TIME}s total)"
+echo "=================================="
+echo "🌐 Your API endpoints:"
+echo "   Transcribe: http://$PUBLIC_IP:8000/transcribe"
+echo "   Health:     http://$PUBLIC_IP:8000/health"
+echo ""
+echo "📝 Usage example:"
+echo "   curl -X POST -F 'audio=@your_file.mp3' http://$PUBLIC_IP:8000/transcribe"
+echo ""
+echo "💰 Cost: ~$1.20/day"
+echo "🛑 Stop: aws ec2 terminate-instances --instance-ids $INSTANCE_ID"
 
-# Clear trap since everything succeeded
+# Clear trap - don't auto-cleanup on success
 trap - EXIT
-
-echo ""
-echo "🚀 API Server Successfully Launched!"
-echo "===================================="
-echo "Instance ID: $INSTANCE_ID"
-echo "Public IP: $PUBLIC_IP"
-echo "API URL: http://$PUBLIC_IP:8000/transcribe"
-echo "Health Check: http://$PUBLIC_IP:8000/health"
-echo ""
-echo "Server will run 24/7 until manually stopped"
-echo ""
-echo "💡 Usage Examples:"
-echo "Test health: curl http://$PUBLIC_IP:8000/health"
-echo "Transcribe:  curl -X POST -F 'audio=@your_file.mp3' http://$PUBLIC_IP:8000/transcribe"
-echo ""
-echo "📊 Management:"
-echo "Check status: aws ec2 describe-instances --instance-ids $INSTANCE_ID"
-echo "Stop server:  aws ec2 terminate-instances --instance-ids $INSTANCE_ID"
-echo "Cost: ~\$1.20/day (g4dn.xlarge on-demand pricing)"
-echo ""
-echo "✅ Setup complete! API server is ready for production use." 
+echo "$INSTANCE_ID" > api_instance_id.txt 
