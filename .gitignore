@@ -1,0 +1,84 @@
+# G4DN.XLARGE Transcription System - Git Ignore
+
+# AWS Credentials and Keys (NEVER commit these!)
+*.pem
+transcription-ec2.pem
+transcription-ec2*.pem
+
+# AMI IDs (sensitive)
+ami_id.txt
+g4dn_ami_id.txt
+*_ami_id.txt
+api_instance_id.txt
+
+# Large files that cause push issues
+quotas.json
+audio20min.mp3
+
+# Transcription Results
+transcription_*.txt
+g4dn_result_*.txt
+gpu_result_*.txt
+performance_*.txt
+system_info_*.txt
+optimized_result_*.txt
+*_result_*.txt
+
+# Audio Files (large)
+*.mp3
+*.wav
+*.m4a
+*.flac
+*.ogg
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+venv/
+env/
+ENV/
+model_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+.tmp
+/tmp/
+
+# Instance tracking files
+api_instance_id.txt
+/tmp/transcribe_instance_id
+/tmp/build_*_instance_id
