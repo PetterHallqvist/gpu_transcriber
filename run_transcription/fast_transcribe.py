@@ -112,6 +112,23 @@ class FastTranscriber:
         log_with_timestamp("Loading model from cache...")
         log_with_timestamp(f"Device: {self.device} ({self.torch_dtype})")
         
+        # Update status in DynamoDB if possible
+        try:
+            import boto3
+            dynamodb = boto3.client('dynamodb', region_name='eu-north-1')
+            job_id = os.environ.get('JOB_ID', 'unknown')
+            dynamodb.update_item(
+                TableName='transcription-jobs',
+                Key={'job_id': {'S': job_id}},
+                UpdateExpression="SET status_message = :message, updated_at = :updated_at",
+                ExpressionAttributeValues={
+                    ':message': {'S': 'Loading Whisper model...'},
+                    ':updated_at': {'S': datetime.now().isoformat()}
+                }
+            )
+        except:
+            pass  # Ignore if DynamoDB update fails
+        
         start_time = time.time()
         
         try:
@@ -165,6 +182,23 @@ class FastTranscriber:
     def transcribe(self, audio_file):
         """Transcribe audio file."""
         log_with_timestamp(f"Starting transcription of: {audio_file}")
+        
+        # Update status in DynamoDB if possible
+        try:
+            import boto3
+            dynamodb = boto3.client('dynamodb', region_name='eu-north-1')
+            job_id = os.environ.get('JOB_ID', 'unknown')
+            dynamodb.update_item(
+                TableName='transcription-jobs',
+                Key={'job_id': {'S': job_id}},
+                UpdateExpression="SET status_message = :message, updated_at = :updated_at",
+                ExpressionAttributeValues={
+                    ':message': {'S': 'Transcribing audio...'},
+                    ':updated_at': {'S': datetime.now().isoformat()}
+                }
+            )
+        except:
+            pass  # Ignore if DynamoDB update fails
         
         # Verify audio file exists
         if not Path(audio_file).exists():

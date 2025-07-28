@@ -1,0 +1,45 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+            "Resource": [
+                "arn:aws:s3:::transcription-curevo/scripts/*",
+                "arn:aws:s3:::transcription-curevo/transcription_upload/*",
+                "arn:aws:s3:::transcription-curevo/results/*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem",
+                "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:Scan",
+                "dynamodb:BatchGetItem", "dynamodb:BatchWriteItem"
+            ],
+            "Resource": "arn:aws:dynamodb:*:*:table/transcription-jobs"
+        },
+        {
+            "Effect": "Allow",
+            "Action": ["dynamodb:CreateTable", "dynamodb:DescribeTable", "dynamodb:ListTables"],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": ["ec2:TerminateInstances"],
+            "Resource": "*",
+            "Condition": {"StringEquals": {"ec2:ResourceTag/AutoTerminate": "true"}}
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents",
+                "logs:DescribeLogGroups", "logs:DescribeLogStreams"
+            ],
+            "Resource": [
+                "arn:aws:logs:*:*:log-group:/aws/ec2/transcription",
+                "arn:aws:logs:*:*:log-group:/aws/ec2/transcription:log-stream:*"
+            ]
+        }
+    ]
+} 
