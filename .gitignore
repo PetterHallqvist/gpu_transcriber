@@ -82,3 +82,4 @@ temp/
 api_instance_id.txt
 /tmp/transcribe_instance_id
 /tmp/build_*_instance_id
+*.zip
