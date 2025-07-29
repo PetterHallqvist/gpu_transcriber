@@ -84,3 +84,8 @@ api_instance_id.txt
 /tmp/build_*_instance_id
 *.zip
 setup/lambda/temp_package/
+*.mp3
+*.wav
+*.m4a
+*.flac
+*.zip
