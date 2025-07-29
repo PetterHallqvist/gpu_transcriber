@@ -5,7 +5,6 @@
             "Effect": "Allow",
             "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
             "Resource": [
-                "arn:aws:s3:::transcription-curevo/scripts/*",
                 "arn:aws:s3:::transcription-curevo/transcription_upload/*",
                 "arn:aws:s3:::transcription-curevo/results/*"
             ]
@@ -29,6 +28,11 @@
             "Action": ["ec2:TerminateInstances"],
             "Resource": "*",
             "Condition": {"StringEquals": {"ec2:ResourceTag/AutoTerminate": "true"}}
+        },
+        {
+            "Effect": "Allow",
+            "Action": ["ec2:DescribeTags"],
+            "Resource": "*"
         },
         {
             "Effect": "Allow",

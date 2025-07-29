@@ -128,7 +128,6 @@ setup_ec2_role() {
                         "Effect": "Allow",
                         "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
                         "Resource": [
-                            "arn:aws:s3:::transcription-curevo/scripts/*",
                             "arn:aws:s3:::transcription-curevo/transcription_upload/*",
                             "arn:aws:s3:::transcription-curevo/results/*"
                         ]

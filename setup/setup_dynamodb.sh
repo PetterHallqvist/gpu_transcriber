@@ -40,11 +40,10 @@ aws iam put-role-policy --role-name "$EC2_ROLE" --policy-name TranscriptionEC2Po
         {
             "Effect": "Allow",
             "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-            "Resource": [
-                "arn:aws:s3:::transcription-curevo/scripts/*",
+                          "Resource": [
                 "arn:aws:s3:::transcription-curevo/transcription_upload/*",
                 "arn:aws:s3:::transcription-curevo/results/*"
-            ]
+              ]
         },
         {
             "Effect": "Allow",
@@ -65,6 +64,11 @@ aws iam put-role-policy --role-name "$EC2_ROLE" --policy-name TranscriptionEC2Po
             "Action": ["ec2:TerminateInstances"],
             "Resource": "*",
             "Condition": {"StringEquals": {"ec2:ResourceTag/AutoTerminate": "true"}}
+        },
+        {
+            "Effect": "Allow",
+            "Action": ["ec2:DescribeTags"],
+            "Resource": "*"
         },
         {
             "Effect": "Allow",

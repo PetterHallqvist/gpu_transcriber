@@ -47,10 +47,10 @@ MISSING_VARS=()
 # Check AMI_ID
 AMI_ID=$(echo "$CURRENT_ENV" | jq -r '.AMI_ID // empty')
 if [ -z "$AMI_ID" ]; then
-    if [ -f "../run_transcription/ami_id.txt" ]; then
-        AMI_ID=$(cat ../run_transcription/ami_id.txt)
-        log "Found AMI ID: $AMI_ID"
-    else
+    if [ -f "../../run_transcription/ami_id.txt" ]; then
+    AMI_ID=$(cat ../../run_transcription/ami_id.txt)
+    log "Found AMI ID: $AMI_ID"
+else
         warn "AMI_ID not found in environment or ami_id.txt"
         MISSING_VARS+=("AMI_ID")
     fi

@@ -8,6 +8,7 @@ S3_BUCKET="transcription-curevo"
 DYNAMODB_TABLE="transcription-jobs"
 LAMBDA_ROLE_NAME="TranscriptionLambdaRole"
 EC2_ROLE_NAME="EC2TranscriptionRole"
+AMI_ID="ami-0c394b1b638b13560"  # GPU-enabled AMI for transcription processing
 
 log() {
     echo -e "\033[0;32m[$(date +'%Y-%m-%d %H:%M:%S')] $1\033[0m"
@@ -29,6 +30,15 @@ fi
 
 if ! aws sts get-caller-identity &> /dev/null; then
     error "AWS credentials not configured"
+fi
+
+if ! command -v jq &> /dev/null; then
+    warn "jq not installed. Installing with brew..."
+    if command -v brew &> /dev/null; then
+        brew install jq
+    else
+        error "jq not installed and brew not available. Please install jq manually."
+    fi
 fi
 
 log "=== Starting Lambda Deployment ==="
@@ -113,7 +123,18 @@ deploy_function() {
     if aws lambda get-function --function-name $function_name --region $REGION &> /dev/null; then
         log "Updating existing function: $function_name"
         aws lambda update-function-code --function-name $function_name --zip-file fileb://$zip_file --region $REGION
-        aws lambda update-function-configuration --function-name $function_name --timeout $timeout --memory-size $memory --region $REGION
+        
+        # Check if configuration update is needed
+        local current_config=$(aws lambda get-function-configuration --function-name $function_name --region $REGION 2>/dev/null || echo "{}")
+        local current_timeout=$(echo "$current_config" | jq -r '.Timeout // "0"')
+        local current_memory=$(echo "$current_config" | jq -r '.MemorySize // "0"')
+        
+        if [ "$current_timeout" != "$timeout" ] || [ "$current_memory" != "$memory" ]; then
+            log "Updating function configuration (timeout: $current_timeout->$timeout, memory: $current_memory->$memory)"
+            aws lambda update-function-configuration --function-name $function_name --timeout $timeout --memory-size $memory --region $REGION
+        else
+            log "Function configuration unchanged, skipping update"
+        fi
     else
         log "Creating new function: $function_name"
         aws lambda create-function \
@@ -134,14 +155,8 @@ deploy_function "TranscriptionAPI" "TranscriptionAPI.zip" "lambda_api.lambda_han
 # Set environment variables
 log "Setting environment variables..."
 
-# Get AMI ID if available
-AMI_ID=""
-if [ -f "../run_transcription/ami_id.txt" ]; then
-    AMI_ID=$(cat ../run_transcription/ami_id.txt)
-    log "Found AMI ID: $AMI_ID"
-else
-    log "Warning: ami_id.txt not found. You'll need to set AMI_ID manually in Lambda console."
-fi
+# AMI ID is predefined at the top of this script
+log "Using hardcoded AMI ID: $AMI_ID"
 
 # Get Security Group ID
 log "Getting Security Group ID..."
@@ -177,19 +192,36 @@ fi
 IAM_ROLE_NAME="EC2TranscriptionRole"
 log "Using IAM Role Name: $IAM_ROLE_NAME"
 
+# Helper function to check if environment variables need updating
+update_env_vars_if_needed() {
+    local function_name=$1
+    local new_env_vars=$2
+    
+    log "Checking environment variables for $function_name..."
+    
+    # Get current environment variables
+    local current_config=$(aws lambda get-function-configuration --function-name $function_name --region $REGION 2>/dev/null || echo "{}")
+    local current_env_vars=$(echo "$current_config" | jq -r '.Environment.Variables // "{}"' 2>/dev/null || echo "{}")
+    
+    # Compare current vs new environment variables
+    if [ "$current_env_vars" = "$new_env_vars" ]; then
+        log "Environment variables unchanged for $function_name, skipping update"
+    else
+        log "Updating environment variables for $function_name"
+        aws lambda update-function-configuration \
+            --function-name $function_name \
+            --environment Variables="$new_env_vars" \
+            --region $REGION
+    fi
+}
+
 # Update TranscriptionProcessUpload Lambda environment variables
-log "Setting environment variables for TranscriptionProcessUpload..."
-aws lambda update-function-configuration \
-    --function-name TranscriptionProcessUpload \
-    --environment Variables="{DYNAMODB_TABLE=$DYNAMODB_TABLE,AMI_ID=$AMI_ID,INSTANCE_TYPE=g4dn.xlarge,SECURITY_GROUP_ID=$SECURITY_GROUP_ID,SUBNET_ID=$SUBNET_ID,IAM_ROLE_NAME=$IAM_ROLE_NAME}" \
-    --region $REGION
+PROCESS_UPLOAD_ENV="{DYNAMODB_TABLE=$DYNAMODB_TABLE,AMI_ID=$AMI_ID,INSTANCE_TYPE=g4dn.xlarge,SECURITY_GROUP_ID=$SECURITY_GROUP_ID,SUBNET_ID=$SUBNET_ID,IAM_ROLE_NAME=$IAM_ROLE_NAME}"
+update_env_vars_if_needed "TranscriptionProcessUpload" "$PROCESS_UPLOAD_ENV"
 
 # Update TranscriptionAPI Lambda environment variables
-log "Setting environment variables for TranscriptionAPI..."
-aws lambda update-function-configuration \
-    --function-name TranscriptionAPI \
-    --environment Variables="{DYNAMODB_TABLE=$DYNAMODB_TABLE}" \
-    --region $REGION
+API_ENV="{DYNAMODB_TABLE=$DYNAMODB_TABLE}"
+update_env_vars_if_needed "TranscriptionAPI" "$API_ENV"
 
 # Setup CloudWatch Logs
 log "Setting up CloudWatch Logs..."
@@ -232,7 +264,7 @@ BUCKET_POLICY='{
             "Sid": "AllowEC2Access",
             "Effect": "Allow",
             "Principal": {
-                "AWS": "arn:aws:iam::*:role/EC2TranscriptionRole"
+                "AWS": "arn:aws:iam::849681699488:role/EC2TranscriptionRole"
             },
             "Action": [
                 "s3:GetObject",
@@ -240,7 +272,6 @@ BUCKET_POLICY='{
                 "s3:DeleteObject"
             ],
             "Resource": [
-                "arn:aws:s3:::transcription-curevo/scripts/*",
                 "arn:aws:s3:::transcription-curevo/transcription_upload/*",
                 "arn:aws:s3:::transcription-curevo/results/*"
             ]
@@ -248,47 +279,74 @@ BUCKET_POLICY='{
     ]
 }'
 
-aws s3api put-bucket-policy \
-    --bucket $S3_BUCKET \
-    --policy "$BUCKET_POLICY" \
-    --region $REGION || warn "Bucket policy may already exist"
+# Check if bucket policy needs updating
+log "Checking S3 bucket policy..."
+current_policy=$(aws s3api get-bucket-policy --bucket $S3_BUCKET --region $REGION 2>/dev/null | jq -r '.Policy // "{}"' 2>/dev/null || echo "{}")
+new_policy_compact=$(echo "$BUCKET_POLICY" | jq -c '.' 2>/dev/null || echo "$BUCKET_POLICY")
 
-aws s3 cp ../run_transcription/fast_transcribe.py s3://$S3_BUCKET/scripts/ --region $REGION
+if [ "$current_policy" = "$new_policy_compact" ]; then
+    log "S3 bucket policy unchanged, skipping update"
+else
+    log "Updating S3 bucket policy..."
+    aws s3api put-bucket-policy \
+        --bucket $S3_BUCKET \
+        --policy "$BUCKET_POLICY" \
+        --region $REGION
+fi
+
+# Scripts are now pre-installed in AMI - no S3 upload needed
+log "Scripts will be pre-installed in AMI - skipping S3 upload"
 
 # Setup S3 event notification
 log "Setting up S3 event notification..."
 PROCESS_LAMBDA_ARN=$(aws lambda get-function --function-name TranscriptionProcessUpload --region $REGION --query 'Configuration.FunctionArn' --output text)
 
-aws s3api put-bucket-notification-configuration \
-    --bucket $S3_BUCKET \
-    --notification-configuration "{
-        \"LambdaFunctionConfigurations\": [
-            {
-                \"Id\": \"TranscriptionUploadTrigger\",
-                \"LambdaFunctionArn\": \"$PROCESS_LAMBDA_ARN\",
-                \"Events\": [\"s3:ObjectCreated:*\"],
-                \"Filter\": {
-                    \"Key\": {
-                        \"FilterRules\": [
-                            {
-                                \"Name\": \"prefix\",
-                                \"Value\": \"transcription_upload/\"
-                            }
-                        ]
+# Check if notification configuration needs updating
+log "Checking S3 notification configuration..."
+current_notification=$(aws s3api get-bucket-notification-configuration --bucket $S3_BUCKET --region $REGION 2>/dev/null | jq -c '.LambdaFunctionConfigurations // []' 2>/dev/null || echo "[]")
+new_notification_config="[{\"Id\":\"TranscriptionUploadTrigger\",\"LambdaFunctionArn\":\"$PROCESS_LAMBDA_ARN\",\"Events\":[\"s3:ObjectCreated:*\"],\"Filter\":{\"Key\":{\"FilterRules\":[{\"Name\":\"prefix\",\"Value\":\"transcription_upload/\"}]}}}]"
+
+if [ "$current_notification" = "$new_notification_config" ]; then
+    log "S3 notification configuration unchanged, skipping update"
+else
+    log "Updating S3 notification configuration..."
+    aws s3api put-bucket-notification-configuration \
+        --bucket $S3_BUCKET \
+        --notification-configuration "{
+            \"LambdaFunctionConfigurations\": [
+                {
+                    \"Id\": \"TranscriptionUploadTrigger\",
+                    \"LambdaFunctionArn\": \"$PROCESS_LAMBDA_ARN\",
+                    \"Events\": [\"s3:ObjectCreated:*\"],
+                    \"Filter\": {
+                        \"Key\": {
+                            \"FilterRules\": [
+                                {
+                                    \"Name\": \"prefix\",
+                                    \"Value\": \"transcription_upload/\"
+                                }
+                            ]
+                        }
                     }
                 }
-            }
-        ]
-    }" --region $REGION
+            ]
+        }" --region $REGION
+fi
 
 # Add Lambda permission for S3
-aws lambda add-permission \
-    --function-name TranscriptionProcessUpload \
-    --statement-id S3InvokePermission \
-    --action lambda:InvokeFunction \
-    --principal s3.amazonaws.com \
-    --source-arn arn:aws:s3:::$S3_BUCKET \
-    --region $REGION || warn "Permission may already exist"
+log "Checking Lambda permission for S3..."
+if aws lambda get-policy --function-name TranscriptionProcessUpload --region $REGION 2>/dev/null | jq -r '.Policy' 2>/dev/null | jq -e '.Statement[] | select(.Sid == "S3InvokePermission")' >/dev/null 2>&1; then
+    log "Lambda permission for S3 already exists, skipping"
+else
+    log "Adding Lambda permission for S3..."
+    aws lambda add-permission \
+        --function-name TranscriptionProcessUpload \
+        --statement-id S3InvokePermission \
+        --action lambda:InvokeFunction \
+        --principal s3.amazonaws.com \
+        --source-arn arn:aws:s3:::$S3_BUCKET \
+        --region $REGION
+fi
 
 # Clean up
 rm -f *.zip
@@ -296,7 +354,7 @@ rm -f *.zip
 log "=== Lambda Deployment Complete ==="
 log ""
 log "Environment variables have been automatically configured:"
-log "✓ AMI_ID: $AMI_ID"
+log "✓ AMI_ID: $AMI_ID (hardcoded)"
 log "✓ INSTANCE_TYPE: g4dn.xlarge"
 log "✓ SECURITY_GROUP_ID: $SECURITY_GROUP_ID"
 log "✓ SUBNET_ID: $SUBNET_ID"

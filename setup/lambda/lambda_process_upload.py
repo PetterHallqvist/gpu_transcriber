@@ -17,10 +17,17 @@ s3 = boto3.client('s3')
 S3_BUCKET = "transcription-curevo"
 S3_PREFIX = "transcription_upload/"
 DYNAMODB_TABLE = os.environ.get('DYNAMODB_TABLE', 'transcription-jobs')
+AMI_ID = 'ami-0c394b1b638b13560'  # GPU-enabled AMI for transcription processing
 
 def log(message):
-    """Log with timestamp."""
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}")
+    """Log message with timestamp."""
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{timestamp}] {message}")
+
+def get_ami_id():
+    """Get AMI ID - using predefined constant for reliability."""
+    log(f"Using AMI ID: {AMI_ID}")
+    return AMI_ID
 
 def ensure_dynamodb_table_exists():
     """Ensure DynamoDB table exists, create if it doesn't."""
@@ -168,76 +175,80 @@ def create_or_get_security_group():
 def launch_ec2_instance(job_id, s3_key):
     """Launch EC2 instance for transcription processing."""
     try:
+        # Get AMI ID first
+        ami_id = get_ami_id()
+        if not ami_id:
+            raise Exception("AMI_ID not available")
+        
         # Get working subnet and security group
         subnet_id = get_working_subnet()
         security_group_id = create_or_get_security_group()
         
-        # Download and run the fast_transcribe.sh script
+        # Fast startup script with enhanced error handling and AMI logging
         user_data = f"""#!/bin/bash
 set -euo pipefail
 
-# Enhanced logging function with CloudWatch integration
+# Enhanced logging function
 log_msg() {{
-    local level="$1"
-    local message="$2"
-    local timestamp=$(date +'%Y-%m-%d %H:%M:%S')
-    echo "[$timestamp] [$level] $message"
-    
-    # Send to CloudWatch if available
-    if command -v aws &> /dev/null; then
-        aws logs put-log-events \
-            --log-group-name "/aws/ec2/transcription" \
-            --log-stream-name "transcription-{job_id}" \
-            --log-events timestamp=$(date +%s)000,message="[$level] $message" \
-            --region eu-north-1 2>/dev/null || true
-    fi
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1"
 }}
 
-log_msg "INFO" "=== EC2 Instance Startup ==="
+log_msg "Starting transcription instance..."
+log_msg "AMI ID: {ami_id}"
 
-# Wait for instance to be fully ready
-log_msg "INFO" "Waiting for instance to be fully ready..."
-sleep 30
+# Get and log instance metadata
+INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || echo "unknown")
+INSTANCE_TYPE=$(curl -s http://169.254.169.254/latest/meta-data/instance-type 2>/dev/null || echo "unknown")
+log_msg "Instance ID: $INSTANCE_ID"
+log_msg "Instance Type: $INSTANCE_TYPE"
 
-# Update system packages
-log_msg "INFO" "Updating system packages..."
-apt-get update -y > /dev/null 2>&1 || log_msg "WARN" "Package update failed"
-
-# Install required packages
-log_msg "INFO" "Installing required packages..."
-apt-get install -y awscli python3-pip python3-venv ffmpeg > /dev/null 2>&1 || log_msg "WARN" "Package installation failed"
-
-# Create working directory
-log_msg "INFO" "Creating working directory..."
-mkdir -p /opt/transcription
-cd /opt/transcription
-
-# Download the fast_transcribe.sh script from S3
-log_msg "INFO" "Downloading fast_transcribe.sh script..."
-if aws s3 cp s3://{S3_BUCKET}/scripts/fast_transcribe.sh ./ --region eu-north-1; then
-    log_msg "INFO" "Script downloaded successfully"
-    chmod +x ./fast_transcribe.sh
-else
-    log_msg "ERROR" "Failed to download fast_transcribe.sh script"
+# Verify AMI setup completion marker
+if [[ ! -f "/opt/transcribe/.setup_complete" ]]; then
+    log_msg "ERROR: AMI setup incomplete - missing /opt/transcribe/.setup_complete"
+    log_msg "This indicates the AMI {ami_id} was not properly built"
     exit 1
 fi
 
-# Run the fast_transcribe.sh script
-log_msg "INFO" "Running fast_transcribe.sh script..."
-./fast_transcribe.sh
+log_msg "AMI setup verified - proceeding with transcription"
 
-log_msg "INFO" "=== Instance shutdown complete ==="
+# Setup working directory
+mkdir -p /opt/transcription
+cd /opt/transcription
+
+# Verify transcription script exists in AMI
+if [[ ! -f "/opt/transcribe/fast_transcribe.py" ]]; then
+    log_msg "ERROR: Python transcription script missing from AMI"
+    log_msg "Expected: /opt/transcribe/fast_transcribe.py"
+    exit 1
+fi
+
+# Check if shell script exists and execute it directly
+if [[ -f "/opt/transcription/fast_transcribe.sh" ]]; then
+    log_msg "Found transcription shell script at /opt/transcription/fast_transcribe.sh"
+    chmod +x /opt/transcription/fast_transcribe.sh
+    log_msg "Executing transcription script..."
+    /opt/transcription/fast_transcribe.sh
+else
+    log_msg "ERROR: Shell script not found at /opt/transcription/fast_transcribe.sh"
+    log_msg "AMI {ami_id} may be missing required scripts"
+    exit 1
+fi
 """
 
         # Launch instance with proper configuration
+        log(f"Launching EC2 instance with AMI: {ami_id}")
+        log(f"Instance type: {os.environ.get('INSTANCE_TYPE', 'g4dn.xlarge')}")
+        log(f"Subnet: {subnet_id}")
+        log(f"Security Group: {security_group_id}")
+        
         response = ec2.run_instances(
-            ImageId=os.environ['AMI_ID'],
+            ImageId=ami_id,
             InstanceType=os.environ.get('INSTANCE_TYPE', 'g4dn.xlarge'),
             MinCount=1,
             MaxCount=1,
             SecurityGroupIds=[security_group_id],
             SubnetId=subnet_id,
-            IamInstanceProfile={'Name': os.environ.get('IAM_ROLE_NAME', 'EC2TranscriptionRole')},  # Use environment variable
+            IamInstanceProfile={'Name': os.environ.get('IAM_ROLE_NAME', 'EC2TranscriptionRole')},
             UserData=user_data,
             TagSpecifications=[{
                 'ResourceType': 'instance',
@@ -245,7 +256,8 @@ log_msg "INFO" "=== Instance shutdown complete ==="
                     {'Key': 'Name', 'Value': f'transcription-{job_id}'},
                     {'Key': 'JobId', 'Value': job_id},
                     {'Key': 'Purpose', 'Value': 'transcription'},
-                    {'Key': 'AutoTerminate', 'Value': 'true'}
+                    {'Key': 'AutoTerminate', 'Value': 'true'},
+                    {'Key': 'AMI_ID', 'Value': ami_id}  # Tag instance with AMI ID for debugging
                 ]
             }]
         )

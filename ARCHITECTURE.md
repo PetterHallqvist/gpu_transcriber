@@ -42,7 +42,7 @@ S3 -----> Lambda (lambda_process_upload.py) -----> EC2 Instance Launch
    S3 Event                              with UserData:
                                         - job_id: abc123
                                         - s3_input: s3://transcription-curevo/transcription_upload/abc123/audio.mp3
-                                        - s3_output: s3://transcription-curevo/results/abc123/
+                                        - s3_output: s3://transcription-curevo/results/abc123/transcription_20241201_143022_audio.txt
 
                                    [2-3 minutes processing]
                                             ↓
