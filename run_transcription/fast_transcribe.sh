@@ -268,6 +268,8 @@ if [[ -n "$CALLBACK_URL" && "$CALLBACK_URL" != "None" ]]; then
         --connect-timeout 10 >/dev/null 2>&1 || log_msg "Warning: Webhook failed"
 fi
 
+
+
 # Show results
 TOTAL_TIME=$(($(date +%s) - START_TIME))
 log_msg "=== Complete ==="

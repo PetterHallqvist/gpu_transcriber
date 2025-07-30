@@ -17,7 +17,7 @@ s3 = boto3.client('s3')
 S3_BUCKET = "transcription-curevo"
 S3_PREFIX = "transcription_upload/"
 DYNAMODB_TABLE = os.environ.get('DYNAMODB_TABLE', 'transcription-jobs')
-AMI_ID = 'ami-00c10af9f03a881a7'  # GPU-enabled AMI for transcription processing
+AMI_ID = 'ami-0915b3f6896046edc'  # GPU-enabled AMI for transcription processing
 
 def log(message):
     """Log message with timestamp."""
@@ -222,13 +222,12 @@ if [[ ! -f "/opt/transcribe/fast_transcribe.py" ]]; then
     exit 1
 fi
 
-# Check if shell script exists and copy it
+# Check if shell script exists and execute it directly
 if [[ -f "/opt/transcription/fast_transcribe.sh" ]]; then
-    log_msg "Copying transcription shell script..."
-    cp /opt/transcription/fast_transcribe.sh ./
-    chmod +x ./fast_transcribe.sh
+    log_msg "Found transcription shell script at /opt/transcription/fast_transcribe.sh"
+    chmod +x /opt/transcription/fast_transcribe.sh
     log_msg "Executing transcription script..."
-    ./fast_transcribe.sh
+    /opt/transcription/fast_transcribe.sh
 else
     log_msg "ERROR: Shell script not found at /opt/transcription/fast_transcribe.sh"
     log_msg "AMI {ami_id} may be missing required scripts"
