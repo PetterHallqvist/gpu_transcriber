@@ -17,7 +17,7 @@ s3 = boto3.client('s3')
 S3_BUCKET = "transcription-curevo"
 S3_PREFIX = "transcription_upload/"
 DYNAMODB_TABLE = os.environ.get('DYNAMODB_TABLE', 'transcription-jobs')
-AMI_ID = 'ami-053c961804f4cb227'  # GPU-enabled AMI for transcription processing
+AMI_ID = 'ami-06e624dc2b8c11c9f'  # GPU-enabled AMI for transcription processing
 
 def log(message):
     """Log message with timestamp."""

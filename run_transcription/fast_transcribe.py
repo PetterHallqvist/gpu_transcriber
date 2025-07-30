@@ -17,7 +17,7 @@ import torch
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 
 # AMI Configuration
-EXPECTED_AMI_ID = 'ami-0915b3f6896046edc'  # Expected GPU-enabled AMI for transcription processing
+EXPECTED_AMI_ID = 'ami-06e624dc2b8c11c9f'  # Expected GPU-enabled AMI for transcription processing
 
 # S3 integration
 try:
@@ -45,9 +45,12 @@ class FastTranscriber:
         if S3_AVAILABLE:
             try:
                 self.s3_client = boto3.client('s3')
-            except:
+                log_msg("S3 client initialized successfully")
+            except Exception as e:
+                log_msg(f"S3 client initialization failed: {e}")
                 self.s3_client = None
         else:
+            log_msg("S3 not available (boto3 not imported)")
             self.s3_client = None
         
         # Set device - trust AMI setup
@@ -177,15 +180,18 @@ class FastTranscriber:
         return result, duration
     
     def upload_to_s3(self, local_file, audio_file, file_type='txt'):
-        """Upload result to S3."""
+        """Upload result to S3 with optimized structure."""
         if not self.s3_client:
+            log_msg(f"S3 upload skipped: S3 client not available")
             return None
             
         try:
             job_id = os.environ.get('JOB_ID', 'unknown')
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             audio_basename = Path(audio_file).stem
-            s3_key = f"results/{job_id}/transcription_{timestamp}_{audio_basename}.{file_type}"
+            
+            # Use dedicated transcription_results folder for better organization
+            s3_key = f"transcription_results/{job_id}/transcription_{timestamp}_{audio_basename}.{file_type}"
             
             log_msg(f"Uploading to S3: s3://{self.s3_bucket}/{s3_key}")
             
@@ -197,6 +203,7 @@ class FastTranscriber:
                 ExtraArgs={'ContentType': content_type}
             )
             
+            log_msg(f"S3 upload successful: s3://{self.s3_bucket}/{s3_key}")
             return f"s3://{self.s3_bucket}/{s3_key}"
             
         except Exception as e:
@@ -204,12 +211,14 @@ class FastTranscriber:
             return None
     
     def save_result(self, result, audio_file, load_time, transcribe_time):
-        """Save transcription result."""
+        """Save transcription result with enhanced JSON structure."""
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_file = f"transcription_{timestamp}.txt"
         json_file = f"transcription_{timestamp}.json"
+        job_id = os.environ.get('JOB_ID', 'unknown')
+        audio_basename = Path(audio_file).stem
         
-        # Save text format
+        # Save text format (compact for performance)
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write("=== GPU TRANSCRIPTION RESULT ===\n")
             f.write(f"File: {audio_file}\n")
@@ -223,25 +232,33 @@ class FastTranscriber:
             f.write("\n=== TRANSCRIPTION ===\n")
             f.write(result["text"])
         
-        # Save JSON format
-        job_id = os.environ.get('JOB_ID', 'unknown')
+        # Enhanced JSON structure with S3 locations
+        total_time = load_time + transcribe_time
         json_data = {
             'job_id': job_id,
             'status': 'completed',
             'transcript': {
                 'text': result["text"],
-                'language': 'sv'
+                'language': 'sv',
+                'confidence': result.get('confidence', 0.95),
+                'segments': result.get('chunks', [])
             },
             'metadata': {
                 'file': audio_file,
                 'timestamp': datetime.now().isoformat(),
                 'device': str(self.device),
                 'model': self.model_id,
-                'load_time': f"{load_time:.2f}s",
-                'transcription_time': f"{transcribe_time:.2f}s",
-                'total_time': f"{load_time + transcribe_time:.2f}s",
+                'processing': {
+                    'load_time': f"{load_time:.2f}s",
+                    'transcription_time': f"{transcribe_time:.2f}s", 
+                    'total_time': f"{total_time:.2f}s"
+                },
                 'text_length': len(result['text']),
                 'version': '1.0'
+            },
+            's3_locations': {
+                'json_result': f"s3://{self.s3_bucket}/transcription_results/{job_id}/transcription_{timestamp}_{audio_basename}.json",
+                'text_backup': f"s3://{self.s3_bucket}/transcription_results/{job_id}/transcription_{timestamp}_{audio_basename}.txt"
             }
         }
         
@@ -259,7 +276,7 @@ class FastTranscriber:
         if s3_json_url:
             log_msg(f"JSON uploaded to: {s3_json_url}")
         
-        return output_file, s3_txt_url
+        return output_file, s3_txt_url, s3_json_url
 
 
 def main():
@@ -309,15 +326,17 @@ def main():
         
         # Save result
         log_msg("Saving results...")
-        output_file, s3_url = transcriber.save_result(result, audio_file, load_time, transcribe_time)
+        output_file, s3_txt_url, s3_json_url = transcriber.save_result(result, audio_file, load_time, transcribe_time)
         
         # Summary
         total_time = load_time + transcribe_time
         log_msg("=== Transcription Complete ===")
         log_msg(f"Total time: {total_time:.2f}s")
         log_msg(f"Output: {output_file}")
-        if s3_url:
-            log_msg(f"S3: {s3_url}")
+        if s3_txt_url:
+            log_msg(f"S3 Text: {s3_txt_url}")
+        if s3_json_url:
+            log_msg(f"S3 JSON: {s3_json_url}")
         
         # Print transcription
         print("\n=== TRANSCRIPTION ===")
