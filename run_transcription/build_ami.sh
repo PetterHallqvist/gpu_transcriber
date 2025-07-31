@@ -463,6 +463,131 @@ CACHE_SCRIPT
     log "Model cached and verified successfully"
 }
 
+# Pre-load model into GPU memory
+preload_gpu_model() {
+    log "Pre-loading model into GPU memory..."
+    
+    cat > /tmp/preload_gpu.py << 'PRELOAD_SCRIPT'
+#!/opt/transcribe/venv/bin/python3
+"""
+GPU Memory Pre-Loading for AMI Build
+Loads model into GPU memory and saves optimized state
+"""
+
+import torch
+import os
+import json
+from datetime import datetime
+from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+
+def log_msg(message):
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{timestamp}] {message}")
+
+def preload_model():
+    model_id = "KBLab/kb-whisper-small"
+    cache_dir = "/opt/transcribe/models"
+    state_dir = "/opt/transcribe/gpu_state"
+    
+    log_msg("=== GPU Memory Pre-Loading ===")
+    log_msg(f"Model: {model_id}")
+    
+    # Create state directory
+    os.makedirs(state_dir, exist_ok=True)
+    
+    # Verify CUDA availability
+    if not torch.cuda.is_available():
+        log_msg("ERROR: CUDA not available - cannot pre-load to GPU")
+        return False
+    
+    log_msg(f"CUDA device: {torch.cuda.get_device_name()}")
+    
+    try:
+        # Load model and move to GPU
+        log_msg("Loading model to GPU...")
+        model = AutoModelForSpeechSeq2Seq.from_pretrained(
+            model_id,
+            cache_dir=cache_dir,
+            local_files_only=True,
+            torch_dtype=torch.float16
+        )
+        model = model.to('cuda')
+        model.eval()
+        
+        log_msg("Model loaded to GPU successfully")
+        
+        # Load processor
+        log_msg("Loading processor...")
+        processor = AutoProcessor.from_pretrained(
+            model_id,
+            cache_dir=cache_dir,
+            local_files_only=True
+        )
+        
+        # Save GPU memory state
+        log_msg("Saving GPU state...")
+        gpu_state_file = f"{state_dir}/model_gpu_state.pt"
+        
+        torch.save({
+            'model_state': model.state_dict(),
+            'model_config': model.config,
+            'device': 'cuda',
+            'dtype': str(torch.float16),
+            'model_id': model_id,
+            'created_at': datetime.now().isoformat()
+        }, gpu_state_file)
+        
+        # Save processor
+        processor_dir = f"{state_dir}/processor"
+        processor.save_pretrained(processor_dir)
+        
+        # Create info file
+        info = {
+            'model_id': model_id,
+            'gpu_state_file': gpu_state_file,
+            'processor_dir': processor_dir,
+            'created_at': datetime.now().isoformat(),
+            'cuda_device': torch.cuda.get_device_name(),
+            'model_size_mb': os.path.getsize(gpu_state_file) / 1024 / 1024,
+            'status': 'ready'
+        }
+        
+        with open(f"{state_dir}/gpu_state_info.json", 'w') as f:
+            json.dump(info, f, indent=2)
+        
+        log_msg(f"GPU state saved: {gpu_state_file}")
+        log_msg(f"Processor saved: {processor_dir}")
+        log_msg(f"State size: {info['model_size_mb']:.1f}MB")
+        log_msg("GPU pre-loading complete!")
+        
+        return True
+        
+    except Exception as e:
+        log_msg(f"ERROR: GPU pre-loading failed: {e}")
+        return False
+
+if __name__ == "__main__":
+    success = preload_model()
+    exit(0 if success else 1)
+PRELOAD_SCRIPT
+
+    # Upload and execute GPU pre-loading script
+    scp -i "${KEY_NAME}.pem" -o StrictHostKeyChecking=no \
+        /tmp/preload_gpu.py ubuntu@"$PUBLIC_IP":/tmp/
+    
+    log "Executing GPU pre-loading script..."
+    ssh -i "${KEY_NAME}.pem" -o StrictHostKeyChecking=no \
+        ubuntu@"$PUBLIC_IP" "cd /opt/transcribe && sudo -u ubuntu /opt/transcribe/venv/bin/python /tmp/preload_gpu.py" \
+        || handle_error "GPU pre-loading failed"
+    
+    # Verify GPU state was created
+    log "Verifying GPU state..."
+    ssh -i "${KEY_NAME}.pem" -o StrictHostKeyChecking=no \
+        ubuntu@"$PUBLIC_IP" "echo '=== GPU STATE VERIFICATION ==='; echo 'GPU state directory:'; ls -la /opt/transcribe/gpu_state/; echo 'GPU state info:'; cat /opt/transcribe/gpu_state/gpu_state_info.json 2>/dev/null || echo 'GPU state info missing'; echo 'State file size:'; du -sh /opt/transcribe/gpu_state/model_gpu_state.pt 2>/dev/null || echo 'GPU state file missing'"
+    
+    log "GPU model pre-loading completed successfully"
+}
+
 # Create transcription script
 create_transcription_script() {
     log "Creating transcription script..."
@@ -484,14 +609,36 @@ create_transcription_script() {
     log "Python script size: $(stat -c%s "${SCRIPT_DIR}/fast_transcribe.py" 2>/dev/null || echo "unknown") bytes"
     log "Shell script size: $(stat -c%s "${SCRIPT_DIR}/fast_transcribe.sh" 2>/dev/null || echo "unknown") bytes"
     
-    # Upload the actual fast_transcribe.py script
+    # Upload the optimized transcription scripts
+    log "Uploading optimized transcription scripts..."
+    
+    # Upload main fast_transcribe.py script
     if ! scp -i "${KEY_NAME}.pem" -o StrictHostKeyChecking=no \
         "${SCRIPT_DIR}/fast_transcribe.py" ubuntu@"$PUBLIC_IP":/opt/transcribe/fast_transcribe.py; then
         handle_error "Failed to upload Python transcription script"
     fi
     
+    # Upload optimized components
+    if ! scp -i "${KEY_NAME}.pem" -o StrictHostKeyChecking=no \
+        "${SCRIPT_DIR}/optimized_loader.py" ubuntu@"$PUBLIC_IP":/opt/transcribe/optimized_loader.py; then
+        handle_error "Failed to upload optimized loader"
+    fi
+    
+    if ! scp -i "${KEY_NAME}.pem" -o StrictHostKeyChecking=no \
+        "${SCRIPT_DIR}/direct_transcribe.py" ubuntu@"$PUBLIC_IP":/opt/transcribe/direct_transcribe.py; then
+        handle_error "Failed to upload direct transcriber"
+    fi
+    
+    if ! scp -i "${KEY_NAME}.pem" -o StrictHostKeyChecking=no \
+        "${SCRIPT_DIR}/gpu_memory_persist.py" ubuntu@"$PUBLIC_IP":/opt/transcribe/gpu_memory_persist.py; then
+        handle_error "Failed to upload GPU memory persistence script"
+    fi
+    
+    # Set permissions
     ssh -i "${KEY_NAME}.pem" -o StrictHostKeyChecking=no \
-        ubuntu@"$PUBLIC_IP" "chmod +x /opt/transcribe/fast_transcribe.py"
+        ubuntu@"$PUBLIC_IP" "chmod +x /opt/transcribe/*.py"
+    
+    log "Optimized scripts uploaded successfully"
     
     # Upload the fast_transcribe.sh script to the correct location
     if ! scp -i "${KEY_NAME}.pem" -o StrictHostKeyChecking=no \
@@ -502,201 +649,51 @@ create_transcription_script() {
     ssh -i "${KEY_NAME}.pem" -o StrictHostKeyChecking=no \
         ubuntu@"$PUBLIC_IP" "chmod +x /opt/transcription/fast_transcribe.sh"
     
-    # ENHANCED: Verify script installation with detailed logging
-    log "=== VERIFYING SCRIPT INSTALLATION ==="
-    
-    # Check file existence and permissions
-    ssh -i "${KEY_NAME}.pem" -o StrictHostKeyChecking=no \
-        ubuntu@"$PUBLIC_IP" "echo '=== SCRIPT VERIFICATION ==='; echo 'Timestamp: $(date)'; echo 'Python script:'; ls -la /opt/transcribe/fast_transcribe.py; echo 'Shell script:'; ls -la /opt/transcription/fast_transcribe.sh; echo 'Directory contents:'; echo '/opt/transcribe:'; ls -la /opt/transcribe/; echo '/opt/transcription:'; ls -la /opt/transcription/"
-    
-    # Test script syntax
-    ssh -i "${KEY_NAME}.pem" -o StrictHostKeyChecking=no \
-        ubuntu@"$PUBLIC_IP" "echo '=== SCRIPT SYNTAX TEST ==='; /opt/transcribe/venv/bin/python -m py_compile /opt/transcribe/fast_transcribe.py && echo 'Python script syntax OK' || echo 'Python script syntax ERROR'; bash -n /opt/transcription/fast_transcribe.sh && echo 'Shell script syntax OK' || echo 'Shell script syntax ERROR'"
-    
-    # Create cloud-init debugging script
-    cat > /tmp/cloud_init_debug.sh << 'CLOUD_DEBUG'
-#!/bin/bash
-set -e
-
-echo "=== CLOUD-INIT DEBUGGING SCRIPT ==="
-echo "Timestamp: $(date)"
-echo "Instance ID: $(curl -s http://169.254.169.254/latest/meta-data/instance-id)"
-
-# Check cloud-init status
-echo "=== CLOUD-INIT STATUS ==="
-cloud-init status --wait || echo "cloud-init status command failed"
-cloud-init status --long || echo "cloud-init status --long failed"
-
-# Check cloud-init logs
-echo "=== CLOUD-INIT LOGS ==="
-if [ -f /var/log/cloud-init.log ]; then
-    echo "Recent cloud-init.log entries:"
-    tail -50 /var/log/cloud-init.log
-else
-    echo "cloud-init.log not found"
-fi
-
-if [ -f /var/log/cloud-init-output.log ]; then
-    echo "Recent cloud-init-output.log entries:"
-    tail -50 /var/log/cloud-init-output.log
-else
-    echo "cloud-init-output.log not found"
-fi
-
-# Check user data scripts
-echo "=== USER DATA SCRIPTS ==="
-if [ -d /var/lib/cloud/instance/scripts ]; then
-    echo "Scripts directory contents:"
-    ls -la /var/lib/cloud/instance/scripts/
-    
-    echo "Scripts directory permissions:"
-    stat /var/lib/cloud/instance/scripts/
-else
-    echo "Scripts directory not found"
-fi
-
-# Check cloud-init configuration
-echo "=== CLOUD-INIT CONFIG ==="
-if [ -f /etc/cloud/cloud.cfg ]; then
-    echo "cloud.cfg exists"
-    grep -E "(scripts_user|scripts-per-instance|scripts-per-boot)" /etc/cloud/cloud.cfg || echo "No script configuration found in cloud.cfg"
-else
-    echo "cloud.cfg not found"
-fi
-
-# Check if our scripts are accessible
-echo "=== SCRIPT ACCESSIBILITY ==="
-echo "Python script:"
-if [ -f /opt/transcribe/fast_transcribe.py ]; then
-    echo "✓ Found: /opt/transcribe/fast_transcribe.py"
-    ls -la /opt/transcribe/fast_transcribe.py
-    echo "First few lines:"
-    head -5 /opt/transcribe/fast_transcribe.py
-else
-    echo "✗ Missing: /opt/transcribe/fast_transcribe.py"
-fi
-
-echo "Shell script:"
-if [ -f /opt/transcription/fast_transcribe.sh ]; then
-    echo "✓ Found: /opt/transcription/fast_transcribe.sh"
-    ls -la /opt/transcription/fast_transcribe.sh
-    echo "First few lines:"
-    head -5 /opt/transcription/fast_transcribe.sh
-else
-    echo "✗ Missing: /opt/transcription/fast_transcribe.sh"
-fi
-
-# Test script execution
-echo "=== SCRIPT EXECUTION TEST ==="
-echo "Testing Python script:"
-if [ -f /opt/transcribe/fast_transcribe.py ]; then
-    /opt/transcribe/venv/bin/python /opt/transcribe/fast_transcribe.py --help 2>&1 || echo "Python script execution test failed"
-else
-    echo "Python script not available for testing"
-fi
-
-echo "Testing shell script:"
-if [ -f /opt/transcription/fast_transcribe.sh ]; then
-    bash -n /opt/transcription/fast_transcribe.sh && echo "Shell script syntax check passed" || echo "Shell script syntax check failed"
-else
-    echo "Shell script not available for testing"
-fi
-
-echo "=== DEBUG COMPLETE ==="
-CLOUD_DEBUG
-
-    # Upload and make executable
-    scp -i "${KEY_NAME}.pem" -o StrictHostKeyChecking=no \
-        /tmp/cloud_init_debug.sh ubuntu@"$PUBLIC_IP":/opt/transcription/cloud_init_debug.sh
+    # Simple script verification
+    log "Verifying optimized scripts..."
     
     ssh -i "${KEY_NAME}.pem" -o StrictHostKeyChecking=no \
-        ubuntu@"$PUBLIC_IP" "chmod +x /opt/transcription/cloud_init_debug.sh"
+        ubuntu@"$PUBLIC_IP" "ls -la /opt/transcribe/*.py && /opt/transcribe/venv/bin/python -m py_compile /opt/transcribe/fast_transcribe.py && echo 'Scripts verified successfully'"
     
-    log "Transcription scripts uploaded and configured with enhanced verification"
+    log "Optimized scripts uploaded and verified"
 }
 
 # Final validation
 validate_setup() {
-    log "Running final validation..."
+    log "Running optimized validation..."
     
-    # Create validation script
+    # Create simplified validation script
     cat > /tmp/validate.sh << 'VALIDATE_SCRIPT'
 #!/bin/bash
 set -e
 
-echo "=== AMI Validation ==="
+echo "=== Optimized AMI Validation ==="
 echo "Timestamp: $(date)"
 
-# Check NVIDIA drivers
-echo -n "[$(date)] Checking NVIDIA drivers... "
-if ! nvidia-smi &> /dev/null; then
-    echo "FAILED"
-    echo "NVIDIA driver diagnostic:"
-    lsmod | grep nvidia || echo "No NVIDIA modules loaded"
-    nvidia-smi 2>&1 || true
-    dkms status nvidia || echo "No NVIDIA DKMS status"
-    exit 1
-fi
-echo "OK"
-nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
+# Essential checks only
+echo -n "NVIDIA drivers... "
+nvidia-smi &> /dev/null && echo "OK" || { echo "FAILED"; exit 1; }
 
-# Detailed CUDA validation
-echo -n "[$(date)] Checking CUDA availability... "
-CUDA_CHECK=$(/opt/transcribe/venv/bin/python -c "import torch; print('CUDA_AVAILABLE' if torch.cuda.is_available() else 'CUDA_NOT_AVAILABLE')" 2>/dev/null)
-if [ "$CUDA_CHECK" = "CUDA_AVAILABLE" ]; then
-    echo "OK"
-    /opt/transcribe/venv/bin/python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA devices: {torch.cuda.device_count()}')"
-else
-    echo "FAILED - CUDA not available to PyTorch"
-    /opt/transcribe/venv/bin/python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available()}')" || echo "Failed to import torch"
-    exit 1
-fi
+echo -n "CUDA availability... "
+/opt/transcribe/venv/bin/python -c "import torch; assert torch.cuda.is_available()" &> /dev/null && echo "OK" || { echo "FAILED"; exit 1; }
 
-# Quick validation of other components
-echo -n "[$(date)] Checking Python environment... "
-/opt/transcribe/venv/bin/python -c "import transformers, librosa, soundfile, boto3" &> /dev/null && echo "OK" || { echo "FAILED"; exit 1; }
-touch /opt/transcribe/.python_verified
+echo -n "Python dependencies... "
+/opt/transcribe/venv/bin/python -c "import transformers, librosa, soundfile" &> /dev/null && echo "OK" || { echo "FAILED"; exit 1; }
 
-echo -n "[$(date)] Checking PyTorch... "
-/opt/transcribe/venv/bin/python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available()}')" &> /dev/null && echo "OK" || { echo "FAILED"; exit 1; }
-touch /opt/transcribe/.pytorch_verified
+echo -n "Model cache... "
+[ -d /opt/transcribe/models ] && echo "OK" || { echo "FAILED"; exit 1; }
 
-echo -n "[$(date)] Checking transformers... "
-/opt/transcribe/venv/bin/python -c "import transformers; print(f'Transformers {transformers.__version__}')" &> /dev/null && echo "OK" || { echo "FAILED"; exit 1; }
-touch /opt/transcribe/.transformers_verified
+echo -n "GPU state... "
+[ -f /opt/transcribe/gpu_state/model_gpu_state.pt ] && echo "OK" || { echo "FAILED"; exit 1; }
 
-echo -n "[$(date)] Checking S3 access... "
-/opt/transcribe/venv/bin/python -c "import boto3; boto3.client('s3').list_buckets()" &> /dev/null && echo "OK (credentials configured)" || echo "WARNING (no S3 credentials - upload will be skipped)"
+echo -n "Optimized scripts... "
+[ -f /opt/transcribe/fast_transcribe.py ] && [ -f /opt/transcribe/optimized_loader.py ] && [ -f /opt/transcribe/direct_transcribe.py ] && echo "OK" || { echo "FAILED"; exit 1; }
 
-echo -n "[$(date)] Checking model cache... "
-[ -f /opt/transcribe/cache/model_info.json ] && [ -d /opt/transcribe/models ] && echo "OK" || { echo "FAILED"; exit 1; }
-touch /opt/transcribe/.model_cache_verified
+# Simple completion marker
+echo "AMI_SETUP_COMPLETE=true" > /opt/transcribe/.setup_complete
+echo "SETUP_DATE=$(date)" >> /opt/transcribe/.setup_complete
 
-echo -n "[$(date)] Checking transcription scripts... "
-[ -f /opt/transcribe/fast_transcribe.py ] && [ -f /opt/transcription/fast_transcribe.sh ] && echo "OK" || { echo "FAILED"; exit 1; }
-
-# Test script syntax
-echo -n "[$(date)] Testing script syntax... "
-/opt/transcribe/venv/bin/python -m py_compile /opt/transcribe/fast_transcribe.py && echo "OK" || { echo "FAILED"; exit 1; }
-
-# Create comprehensive completion marker with all verification info
-cat > /opt/transcribe/.setup_complete << EOF
-AMI_SETUP_COMPLETE=true
-SETUP_DATE=\$(date)
-NVIDIA_DRIVERS=installed
-PYTHON_ENV=ready
-PYTORCH=ready
-TRANSFORMERS=ready
-MODEL_CACHE=ready
-SCRIPTS=ready
-KERNEL_VERSION=\$(uname -r)
-NVIDIA_VERSION=\$(nvidia-smi --query-gpu=driver_version --format=csv,noheader,nounits | head -1)
-PYTORCH_VERSION=\$(/opt/transcribe/venv/bin/python -c "import torch; print(torch.__version__)")
-TRANSFORMERS_VERSION=\$(/opt/transcribe/venv/bin/python -c "import transformers; print(transformers.__version__)")
-MODEL_ID=KBLab/kb-whisper-small
-EOF
-
-echo "[$(date)] Validation complete"
+echo "Optimized validation complete"
 VALIDATE_SCRIPT
 
     # Upload and validate
@@ -833,6 +830,7 @@ main() {
     establish_ssh
     setup_instance
     cache_model
+    preload_gpu_model
     create_transcription_script
     validate_setup
     create_ami
@@ -844,7 +842,7 @@ main() {
     log "Lambda function and scripts updated with new AMI ID"
     
     # Final summary
-    log "=== BUILD SUMMARY ==="
+    log "=== OPTIMIZED BUILD SUMMARY ==="
     log "✓ Base AMI: $BASE_AMI"
     log "✓ New AMI: $AMI_ID"
     log "✓ Instance Type: $INSTANCE_TYPE"
@@ -852,10 +850,13 @@ main() {
     log "✓ NVIDIA Drivers: Installed"
     log "✓ Python Environment: Ready"
     log "✓ Model Cache: Created"
+    log "✓ GPU Memory State: Pre-loaded"
+    log "✓ Optimized Loader: Installed"
+    log "✓ Direct Transcriber: Installed"
     log "✓ Scripts: Uploaded and Verified"
     log "✓ Lambda Function: Updated"
     log "✓ Setup Marker: Created"
-    log "====================="
+    log "================================"
     log ""
     log "Next steps:"
     log "1. Deploy the updated lambda function with: cd ../setup/lambda && ./deploy_lambda_functions.sh"

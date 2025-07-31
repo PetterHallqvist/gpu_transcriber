@@ -5,6 +5,7 @@ import json
 import boto3
 import os
 import uuid
+import urllib.parse
 from datetime import datetime
 from botocore.exceptions import ClientError
 
@@ -17,7 +18,7 @@ s3 = boto3.client('s3')
 S3_BUCKET = "transcription-curevo"
 S3_PREFIX = "transcription_upload/"
 DYNAMODB_TABLE = os.environ.get('DYNAMODB_TABLE', 'transcription-jobs')
-AMI_ID = 'ami-021f2757a5dd5d0e4'  # GPU-enabled AMI for transcription processing
+AMI_ID = 'ami-051be79f88b9cbb42'  # Optimized GPU-enabled AMI for transcription processing
 
 def log(message):
     """Log message with timestamp."""
@@ -64,7 +65,7 @@ def ensure_dynamodb_table_exists():
             log(f"Error checking DynamoDB table: {e}")
             return False
 
-def create_job_record(job_id, s3_key, status="launching", callback_url=None, callback_secret=None):
+def create_job_record(job_id, s3_key, status="launching", callback_url=None, callback_secret=None, standardized_filename=None):
     """Create job record in DynamoDB."""
     try:
         # Ensure table exists before creating record
@@ -85,6 +86,10 @@ def create_job_record(job_id, s3_key, status="launching", callback_url=None, cal
             item['callback_url'] = {'S': callback_url}
         if callback_secret:
             item['callback_secret'] = {'S': callback_secret}
+            
+        # Add standardized filename if provided
+        if standardized_filename:
+            item['standardized_filename'] = {'S': standardized_filename}
             
         dynamodb.put_item(
             TableName=DYNAMODB_TABLE,
@@ -107,6 +112,61 @@ def get_working_subnet():
         # Fallback to hardcoded subnet for eu-north-1a
         log("Warning: SUBNET_ID not set, using fallback subnet")
         return "subnet-0e18482f4c0b1d4ac"
+
+def fix_s3_object_permissions(bucket_name, s3_key):
+    """Fix S3 object permissions to ensure EC2 instance can access the file."""
+    try:
+        log(f"Fixing S3 object permissions for: s3://{bucket_name}/{s3_key}")
+        
+        # Set object ACL to bucket-owner-full-control to ensure EC2 instance can access
+        s3.put_object_acl(
+            Bucket=bucket_name,
+            Key=s3_key,
+            ACL='bucket-owner-full-control'
+        )
+        
+        log(f"S3 object permissions fixed successfully for: s3://{bucket_name}/{s3_key}")
+        return True
+        
+    except ClientError as e:
+        error_code = e.response['Error']['Code']
+        if error_code == 'NoSuchKey':
+            log(f"Warning: S3 object not found: s3://{bucket_name}/{s3_key}")
+            log("This may be due to URL encoding issues - trying to find the actual key...")
+            
+            # Try to find the actual key by listing objects with similar names
+            try:
+                prefix = s3_key.rsplit('/', 1)[0] + '/' if '/' in s3_key else ''
+                response = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
+                
+                if 'Contents' in response:
+                    for obj in response['Contents']:
+                        decoded_key = urllib.parse.unquote(obj['Key'])
+                        if decoded_key == s3_key:
+                            log(f"Found URL-encoded key: {obj['Key']}")
+                            # Fix permissions on the actual URL-encoded key
+                            s3.put_object_acl(
+                                Bucket=bucket_name,
+                                Key=obj['Key'],
+                                ACL='bucket-owner-full-control'
+                            )
+                            log(f"Fixed permissions on URL-encoded key: {obj['Key']}")
+                            return True
+            except Exception as list_error:
+                log(f"Error listing objects: {list_error}")
+            
+            return False
+        elif error_code == 'AccessDenied':
+            log(f"Warning: Cannot modify S3 object ACL (Access Denied): s3://{bucket_name}/{s3_key}")
+            log("This may be due to bucket policy restrictions, but EC2 should still be able to access")
+            return True  # Consider this a success since EC2 might still have access
+        else:
+            log(f"Error fixing S3 object permissions: {e}")
+            return False
+    except Exception as e:
+        log(f"Unexpected error fixing S3 object permissions: {e}")
+        return False
+
 
 def create_or_get_security_group():
     """Create or get security group with proper rules for transcription."""
@@ -172,7 +232,7 @@ def create_or_get_security_group():
         log(f"Error creating security group: {e}")
         raise
 
-def launch_ec2_instance(job_id, s3_key):
+def launch_ec2_instance(job_id, s3_key, standardized_filename):
     """Launch EC2 instance for transcription processing."""
     try:
         # Get AMI ID first
@@ -184,32 +244,31 @@ def launch_ec2_instance(job_id, s3_key):
         subnet_id = get_working_subnet()
         security_group_id = create_or_get_security_group()
         
-        # Fast startup script with enhanced error handling and AMI logging
+        # Create user data script for EC2 instance
         user_data = f"""#!/bin/bash
-set -euo pipefail
+set -e
 
-# Enhanced logging function
-log_msg() {{
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1"
-}}
+# Log startup
+echo "[$(date)] EC2 instance starting for job: {job_id}"
+echo "[$(date)] Original S3 key: {s3_key}"
+echo "[$(date)] Standardized filename: {standardized_filename}"
 
-log_msg "Starting transcription instance..."
-log_msg "AMI ID: {ami_id}"
+# Set environment variables
+export JOB_ID="{job_id}"
+export S3_KEY="{s3_key}"
+export STANDARDIZED_FILENAME="{standardized_filename}"
 
-# Get and log instance metadata
-INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || echo "unknown")
-INSTANCE_TYPE=$(curl -s http://169.254.169.254/latest/meta-data/instance-type 2>/dev/null || echo "unknown")
-log_msg "Instance ID: $INSTANCE_ID"
-log_msg "Instance Type: $INSTANCE_TYPE"
+# Wait for cloud-init to complete
+cloud-init status --wait
 
 # Verify AMI setup completion marker
 if [[ ! -f "/opt/transcribe/.setup_complete" ]]; then
-    log_msg "ERROR: AMI setup incomplete - missing /opt/transcribe/.setup_complete"
-    log_msg "This indicates the AMI {ami_id} was not properly built"
+    echo "[$(date)] ERROR: AMI setup incomplete - missing /opt/transcribe/.setup_complete"
+    echo "[$(date)] This indicates the AMI was not properly built"
     exit 1
 fi
 
-log_msg "AMI setup verified - proceeding with transcription"
+echo "[$(date)] AMI setup verified - proceeding with transcription"
 
 # Setup working directory
 mkdir -p /opt/transcription
@@ -217,20 +276,20 @@ cd /opt/transcription
 
 # Verify transcription script exists in AMI
 if [[ ! -f "/opt/transcribe/fast_transcribe.py" ]]; then
-    log_msg "ERROR: Python transcription script missing from AMI"
-    log_msg "Expected: /opt/transcribe/fast_transcribe.py"
+    echo "[$(date)] ERROR: Python transcription script missing from AMI"
+    echo "[$(date)] Expected: /opt/transcribe/fast_transcribe.py"
     exit 1
 fi
 
 # Check if shell script exists and execute it directly
 if [[ -f "/opt/transcription/fast_transcribe.sh" ]]; then
-    log_msg "Found transcription shell script at /opt/transcription/fast_transcribe.sh"
+    echo "[$(date)] Found transcription shell script at /opt/transcription/fast_transcribe.sh"
     chmod +x /opt/transcription/fast_transcribe.sh
-    log_msg "Executing transcription script..."
+    echo "[$(date)] Executing transcription script..."
     /opt/transcription/fast_transcribe.sh
 else
-    log_msg "ERROR: Shell script not found at /opt/transcription/fast_transcribe.sh"
-    log_msg "AMI {ami_id} may be missing required scripts"
+    echo "[$(date)] ERROR: Shell script not found at /opt/transcription/fast_transcribe.sh"
+    echo "[$(date)] AMI may be missing required scripts"
     exit 1
 fi
 """
@@ -284,6 +343,23 @@ fi
         log(f"Error launching EC2 instance: {e}")
         raise
 
+def create_standardized_filename(original_s3_key):
+    """Create a standardized filename with date_time_random format."""
+    # Extract file extension from original S3 key
+    file_extension = original_s3_key.split('.')[-1].lower() if '.' in original_s3_key else 'mp3'
+    
+    # Validate file extension
+    if file_extension not in ['mp3', 'wav', 'm4a', 'flac']:
+        file_extension = 'mp3'  # Default fallback
+    
+    # Create standardized name: YYYYMMDD_HHMMSS_RANDOM.ext
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    random_suffix = str(uuid.uuid4())[:8]  # First 8 characters of UUID
+    
+    standardized_name = f"{timestamp}_{random_suffix}.{file_extension}"
+    
+    return standardized_name
+
 def lambda_handler(event, context):
     """Main Lambda handler."""
     log("=== S3 Upload Triggered ===")
@@ -292,9 +368,15 @@ def lambda_handler(event, context):
         # Extract S3 event
         s3_event = event['Records'][0]['s3']
         bucket_name = s3_event['bucket']['name']
-        s3_key = s3_event['object']['key']
+        original_s3_key = s3_event['object']['key']
         
-        log(f"Bucket: {bucket_name}, Key: {s3_key}")
+        # URL-decode the S3 key to handle special characters uploaded via S3 console
+        s3_key = urllib.parse.unquote(original_s3_key)
+        
+        if original_s3_key != s3_key:
+            log(f"URL-decoded S3 key: '{original_s3_key}' -> '{s3_key}'")
+        
+        log(f"Original S3 key: {s3_key}")
         
         # Validate bucket and prefix
         if bucket_name != S3_BUCKET or not s3_key.startswith(S3_PREFIX):
@@ -325,15 +407,28 @@ def lambda_handler(event, context):
         job_id = str(uuid.uuid4())
         log(f"Generated new job_id: {job_id}")
         
+        # Create standardized filename
+        standardized_filename = create_standardized_filename(s3_key)
+        log(f"Original S3 key: {s3_key}")
+        log(f"Standardized filename: {standardized_filename}")
+        
         # Extract filename from S3 key for logging
         filename = s3_key.split('/')[-1] if '/' in s3_key else s3_key
-        log(f"Processing file: {filename}")
+        log(f"Processing file: {filename} -> {standardized_filename}")
         
-        if not create_job_record(job_id, s3_key, callback_url=callback_url, callback_secret=callback_secret):
+        # Fix S3 object permissions to ensure EC2 instance can access the file
+        # This is critical for files uploaded via S3 console vs CLI
+        log("Fixing S3 object permissions...")
+        permissions_fixed = fix_s3_object_permissions(bucket_name, s3_key)
+        if not permissions_fixed:
+            log("Warning: Could not fix S3 object permissions, proceeding anyway")
+        
+        # Create job record with both original S3 key and standardized filename
+        if not create_job_record(job_id, s3_key, callback_url=callback_url, callback_secret=callback_secret, standardized_filename=standardized_filename):
             raise Exception("Failed to create job record")
         
-        # Launch EC2 instance
-        instance_id = launch_ec2_instance(job_id, s3_key)
+        # Launch EC2 instance with standardized filename
+        instance_id = launch_ec2_instance(job_id, s3_key, standardized_filename)
         
         # Update status to processing
         dynamodb.update_item(
@@ -355,7 +450,8 @@ def lambda_handler(event, context):
                 'message': 'Transcription job launched',
                 'job_id': job_id,
                 'instance_id': instance_id,
-                's3_key': s3_key
+                's3_key': s3_key,
+                'standardized_filename': standardized_filename
             })
         }
         

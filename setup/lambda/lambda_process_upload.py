@@ -18,7 +18,7 @@ s3 = boto3.client('s3')
 S3_BUCKET = "transcription-curevo"
 S3_PREFIX = "transcription_upload/"
 DYNAMODB_TABLE = os.environ.get('DYNAMODB_TABLE', 'transcription-jobs')
-AMI_ID = 'ami-06e624dc2b8c11c9f'  # GPU-enabled AMI for transcription processing
+AMI_ID = 'ami-051be79f88b9cbb42'  # Optimized GPU-enabled AMI for transcription processing
 
 def log(message):
     """Log message with timestamp."""
@@ -228,7 +228,7 @@ def create_or_get_security_group():
         log(f"Error creating security group: {e}")
         raise
 
-def launch_ec2_instance(job_id, s3_key):
+def launch_ec2_instance(job_id, s3_key, standardized_filename):
     """Launch EC2 instance for transcription processing."""
     try:
         # Get AMI ID first
@@ -277,6 +277,16 @@ if [[ ! -f "/opt/transcribe/fast_transcribe.py" ]]; then
     log_msg "Expected: /opt/transcribe/fast_transcribe.py"
     exit 1
 fi
+
+# Set environment variables for the transcription script
+export S3_KEY="{s3_key}"
+export STANDARDIZED_FILENAME="{standardized_filename}"
+export JOB_ID="{job_id}"
+
+log_msg "Environment variables set:"
+log_msg "S3_KEY: $S3_KEY"
+log_msg "STANDARDIZED_FILENAME: $STANDARDIZED_FILENAME"
+log_msg "JOB_ID: $JOB_ID"
 
 # Check if shell script exists and execute it directly
 if [[ -f "/opt/transcription/fast_transcribe.sh" ]]; then
@@ -368,32 +378,27 @@ def lambda_handler(event, context):
             log(f"Ignoring non-audio file: {s3_key}")
             return {'statusCode': 200, 'body': json.dumps({'message': 'Not audio file'})}
         
-        # Generate standardized filename to avoid URL encoding issues
+        # Generate simple standardized filename: date_time_uuid.extension
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         file_uuid = str(uuid.uuid4())[:8]  # Use first 8 characters of UUID
         file_extension = s3_key.split('.')[-1].lower()
         original_filename = s3_key.split('/')[-1] if '/' in s3_key else s3_key
         
-        # Create standardized filename
-        standardized_filename = f"transcription_{timestamp}_{file_uuid}.{file_extension}"
+        # Create simple standardized filename
+        standardized_filename = f"{timestamp}_{file_uuid}.{file_extension}"
         new_s3_key = f"{S3_PREFIX}{standardized_filename}"
         
         log(f"Original filename: {original_filename}")
         log(f"Standardized filename: {standardized_filename}")
         log(f"New S3 key: {new_s3_key}")
         
-        # Rename the file in S3 to avoid URL encoding issues
+        # Copy and rename the file in S3 with simple naming
         try:
             log(f"Renaming file from {s3_key} to {new_s3_key}")
             s3.copy_object(
                 Bucket=bucket_name,
                 CopySource={'Bucket': bucket_name, 'Key': s3_key},
-                Key=new_s3_key,
-                Metadata={
-                    'original-filename': original_filename,
-                    'original-s3-key': s3_key,
-                    'upload-timestamp': datetime.now().isoformat()
-                }
+                Key=new_s3_key
             )
             
             # Delete the original file
@@ -404,8 +409,11 @@ def lambda_handler(event, context):
             s3_key = new_s3_key
             
         except Exception as e:
-            log(f"Warning: Failed to rename file, proceeding with original key: {e}")
-            # Continue with original key if rename fails
+            log(f"Error: Failed to rename file: {e}")
+            return {
+                'statusCode': 500,
+                'body': json.dumps({'error': f'Failed to rename file: {str(e)}'})
+            }
         
         # Ensure DynamoDB table exists before processing
         log("Ensuring DynamoDB table exists...")
@@ -437,28 +445,12 @@ def lambda_handler(event, context):
         if not permissions_fixed:
             log("Warning: Could not fix S3 object permissions, proceeding anyway")
         
-        # Create job record with both original and standardized information
+        # Create job record
         if not create_job_record(job_id, s3_key, callback_url=callback_url, callback_secret=callback_secret):
             raise Exception("Failed to create job record")
         
-        # Store original filename information in DynamoDB for reference
-        try:
-            dynamodb.update_item(
-                TableName=DYNAMODB_TABLE,
-                Key={'job_id': {'S': job_id}},
-                UpdateExpression="SET original_filename = :orig_filename, original_s3_key = :orig_key, standardized_filename = :std_filename",
-                ExpressionAttributeValues={
-                    ':orig_filename': {'S': original_filename},
-                    ':orig_key': {'S': original_s3_key},
-                    ':std_filename': {'S': standardized_filename}
-                }
-            )
-            log(f"Stored original filename: {original_filename}")
-        except Exception as e:
-            log(f"Warning: Failed to store original filename info: {e}")
-        
-        # Launch EC2 instance
-        instance_id = launch_ec2_instance(job_id, s3_key)
+        # Launch EC2 instance with the new standardized S3 key and filename
+        instance_id = launch_ec2_instance(job_id, s3_key, standardized_filename)
         
         # Update status to processing
         dynamodb.update_item(

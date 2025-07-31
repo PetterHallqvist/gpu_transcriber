@@ -79,18 +79,19 @@ export JOB_ID
 
 log_msg "=== Fast GPU Transcription Startup ===" "STATUS"
 
-# Get S3 key from DynamoDB
-S3_KEY=$(aws dynamodb get-item \
-    --table-name "$DYNAMODB_TABLE" \
-    --key "{\"job_id\": {\"S\": \"$JOB_ID\"}}" \
-    --query 'Item.s3_key.S' --output text --region "$REGION" 2>/dev/null || echo "")
-
+# Use environment variables passed from Lambda (no DynamoDB lookup needed)
 if [[ -z "$S3_KEY" ]]; then
-    log_msg "Error: S3 key not found in DynamoDB for job $JOB_ID"
+    log_msg "Error: S3_KEY environment variable not set"
+    exit 1
+fi
+
+if [[ -z "$STANDARDIZED_FILENAME" ]]; then
+    log_msg "Error: STANDARDIZED_FILENAME environment variable not set"
     exit 1
 fi
 
 log_msg "S3 Key: $S3_KEY"
+log_msg "Standardized filename: $STANDARDIZED_FILENAME"
 
 # Update status to processing
 aws dynamodb update-item \
@@ -127,6 +128,14 @@ if [[ ! -d "/opt/transcribe/models" ]]; then
     MISSING_COMPONENTS+=("Model cache: /opt/transcribe/models")
 fi
 
+if [[ ! -f "/opt/transcribe/gpu_state/model_gpu_state.pt" ]]; then
+    MISSING_COMPONENTS+=("GPU state: /opt/transcribe/gpu_state/model_gpu_state.pt")
+fi
+
+if [[ ! -d "/opt/transcribe/gpu_state/processor" ]]; then
+    MISSING_COMPONENTS+=("GPU processor: /opt/transcribe/gpu_state/processor")
+fi
+
 if [[ ${#MISSING_COMPONENTS[@]} -gt 0 ]]; then
     log_msg "ERROR: Missing AMI components:" "ERROR"
     for component in "${MISSING_COMPONENTS[@]}"; do
@@ -142,23 +151,17 @@ log_msg "AMI verified - all dependencies ready"
 cd /opt/transcription
 log_msg "Current working directory: $(pwd)" "DEBUG"
 
-# Determine file extension
-FILE_EXTENSION="${S3_KEY##*.}"
-if [[ "$FILE_EXTENSION" == "$S3_KEY" ]]; then
-    FILE_EXTENSION="mp3"
-fi
-
-# Download audio file
-log_msg "Downloading audio file... S3_BUCKET=$S3_BUCKET S3_KEY=$S3_KEY FILE_EXTENSION=$FILE_EXTENSION" "DEBUG"
-aws s3 cp "s3://$S3_BUCKET/$S3_KEY" "./audio_file.$FILE_EXTENSION" --region "$REGION"
+# Download audio file with standardized name
+log_msg "Downloading audio file... S3_BUCKET=$S3_BUCKET S3_KEY=$S3_KEY FILENAME=$STANDARDIZED_FILENAME" "DEBUG"
+aws s3 cp "s3://$S3_BUCKET/$S3_KEY" "./$STANDARDIZED_FILENAME" --region "$REGION"
 
 # Verify download
-if [[ ! -f "./audio_file.$FILE_EXTENSION" ]]; then
+if [[ ! -f "./$STANDARDIZED_FILENAME" ]]; then
     log_msg "Error: Download failed"
     exit 1
 fi
 
-FILE_SIZE=$(stat -c%s "./audio_file.$FILE_EXTENSION" 2>/dev/null || echo "0")
+FILE_SIZE=$(stat -c%s "./$STANDARDIZED_FILENAME" 2>/dev/null || echo "0")
 log_msg "Downloaded: $FILE_SIZE bytes"
 
 # Activate virtual environment (pre-installed)
@@ -194,15 +197,15 @@ if [[ ! -f "/opt/transcribe/fast_transcribe.py" ]]; then
 fi
 
 # Verify audio file exists before transcription
-if [[ ! -f "audio_file.$FILE_EXTENSION" ]]; then
-    log_msg "ERROR: Audio file missing: audio_file.$FILE_EXTENSION" "ERROR"
+if [[ ! -f "$STANDARDIZED_FILENAME" ]]; then
+    log_msg "ERROR: Audio file missing: $STANDARDIZED_FILENAME" "ERROR"
     exit 1
 fi
 
-log_msg "Starting transcription: python3 /opt/transcribe/fast_transcribe.py audio_file.$FILE_EXTENSION"
+log_msg "Starting transcription: python3 /opt/transcribe/fast_transcribe.py $STANDARDIZED_FILENAME"
 
 # Run transcription with detailed error capture
-if python3 /opt/transcribe/fast_transcribe.py "audio_file.$FILE_EXTENSION" 2>&1; then
+if python3 /opt/transcribe/fast_transcribe.py "$STANDARDIZED_FILENAME" 2>&1; then
     log_msg "Transcription completed successfully!" "STATUS"
     TRANSCRIPTION_SUCCESS=true
 else
