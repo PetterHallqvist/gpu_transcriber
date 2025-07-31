@@ -237,12 +237,13 @@ if [ "$AMI_DETAILS" != "{}" ]; then
     
     # Based on the build_ami.sh script, we expect:
     # - /opt/transcribe/fast_transcribe.py
-    # - /opt/transcription/fast_transcribe.sh
+    # - /opt/transcribe/fast_transcribe.sh
     # - /opt/transcribe/.setup_complete marker
     
     log "Expected AMI structure (based on build_ami.sh):"
     log "  ✓ /opt/transcribe/fast_transcribe.py (Python transcription script)"
-    log "  ✓ /opt/transcription/fast_transcribe.sh (Shell startup script)"
+    log "  ✓ /opt/transcribe/fast_transcribe.sh (Shell startup script)"
+    log "  ✓ /opt/transcription/fast_transcribe.sh (Shell script copy for Lambda)"
     log "  ✓ /opt/transcribe/.setup_complete (Setup completion marker)"
     log "  ✓ /opt/transcribe/venv/ (Python virtual environment)"
     log "  ✓ /opt/transcribe/models/ (Cached Whisper model)"

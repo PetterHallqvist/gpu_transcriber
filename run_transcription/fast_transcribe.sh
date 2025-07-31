@@ -148,8 +148,16 @@ fi
 log_msg "AMI verified - all dependencies ready"
 
 # Setup working directory
-cd /opt/transcription
+cd /opt/transcribe
 log_msg "Current working directory: $(pwd)" "DEBUG"
+
+# Verify S3 object exists before attempting download
+log_msg "Verifying S3 object exists: s3://$S3_BUCKET/$S3_KEY" "DEBUG"
+if ! aws s3api head-object --bucket "$S3_BUCKET" --key "$S3_KEY" --region "$REGION" >/dev/null 2>&1; then
+    log_msg "ERROR: S3 object does not exist: s3://$S3_BUCKET/$S3_KEY" "ERROR"
+    log_msg "This indicates a failure in the Lambda file processing step" "ERROR"
+    exit 1
+fi
 
 # Download audio file with standardized name
 log_msg "Downloading audio file... S3_BUCKET=$S3_BUCKET S3_KEY=$S3_KEY FILENAME=$STANDARDIZED_FILENAME" "DEBUG"

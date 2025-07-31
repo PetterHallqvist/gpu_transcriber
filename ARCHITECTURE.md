@@ -86,10 +86,11 @@ EC2 Worker -----> DynamoDB (get callback info)
 
 ### Lambda Functions
 
-| Function | File | Purpose | Trigger |
-|----------|------|---------|---------|
-| **TranscriptionAPI** | `lambda_api.py` | Register callback URLs | HTTP API |
-| **TranscriptionProcessUpload** | `lambda_process_upload.py` | Orchestrate transcription | S3 upload event |
+| Function | File | Purpose | Trigger | AMI Dependency |
+|----------|------|---------|---------|----------------|
+| **TranscriptionAPI** | `lambda_api.py` | Register callback URLs | HTTP API | None |
+| **TranscriptionProcessUpload** | `lambda_process_upload.py` | Orchestrate transcription | S3 upload event | Uses AMI_ID env var |
+| **TranscriptionWebhookDelivery** | `lambda_webhook_delivery.py` | Send webhook notifications | DynamoDB updates | None |
 
 ### S3 Bucket Structure
 
@@ -179,21 +180,85 @@ transcription-curevo/
 └─────────────────┘    └──────────────────┘    └─────────────────┘
 ```
 
-## File Locations
+## File Structure & Organization
 
-### Lambda Functions
-- `lambda/lambda_api.py` - Callback registration
-- `lambda/lambda_process_upload.py` - EC2 instance orchestration
+### Core Transcription System
+```
+run_transcription/
+├── fast_transcribe.sh          # Main EC2 startup script (runs on instance)
+├── fast_transcribe.py          # Python transcription engine
+├── build_ami.sh               # AMI builder with dependency installation
+├── optimized_loader.py        # Optimized model loading strategies
+├── direct_transcribe.py       # Direct transcription without pipeline
+├── gpu_memory_persist.py      # GPU memory optimization utilities
+└── test_model_cache.py        # Model caching verification
+```
 
-### Infrastructure Setup
-- `setup/setup_infrastructure.sh` - AWS resource creation
-- `setup/lambda/deploy_lambda_functions.sh` - Lambda deployment
-- `setup/setup_api_gateway.sh` - API Gateway configuration
+### AWS Infrastructure Setup
+```
+setup/
+├── setup_infrastructure.sh    # Complete AWS resource creation
+├── setup_api_gateway.sh       # API Gateway configuration
+├── setup_dynamodb.sh          # DynamoDB table creation
+├── cleanup_transcription_instances.sh  # Cleanup utility
+├── ec2_instance_role_policy.json      # EC2 IAM permissions
+└── lambda/
+    ├── deploy_lambda_functions.sh     # Lambda deployment with AMI sync
+    ├── lambda_process_upload.py       # S3 trigger → EC2 orchestration
+    ├── lambda_api.py                  # API endpoint → callback registration
+    ├── lambda_webhook_delivery.py     # Webhook notification handler
+    ├── bucket_policy.json             # S3 bucket permissions
+    ├── lambda_execution_role_policy.json # Lambda IAM permissions
+    ├── setup_cloudwatch_logs.sh       # CloudWatch log configuration
+    └── verify_lambda_env.sh           # Environment verification
+```
 
-### Worker Scripts
-- `run_transcription/fast_transcribe.py` - GPU transcription engine
-- `run_transcription/build_ami.sh` - AMI creation script
+### AMI Management & Dependencies
+- **Production AMI**: `ami-0d090b80bc56081ba` (optimized with pre-cached models, CUDA, dependencies)
+- **Build Source**: `ami-0989fb15ce71ba39e` (clean Ubuntu 22.04 LTS used only for AMI construction)
+- **Region**: `eu-north-1` (Stockholm)
+- **Build Process**: `build_ami.sh` transforms Build Source → Production AMI
+- **Dependencies**: Pre-cached models, CUDA kernels, optimized Python environment
 
-### Configuration Files
-- `setup/lambda/bucket_policy.json` - S3 bucket permissions
-- `setup/ec2_instance_role_policy.json` - EC2 IAM role 
+*The Production AMI is the only one that matters for running transcriptions. The Build Source is just the starting material for creating new Production AMIs.*
+
+### Debugging & Utilities
+```
+debug_ami_status.sh            # AMI verification and debugging
+fix_lambda_permissions.sh      # Permission troubleshooting
+```
+
+## AMI Update Workflow
+
+The system uses a coordinated AMI update process to ensure consistency across all components:
+
+### 1. AMI ID Management
+- **Hardcoded approach**: AMI IDs are constants in source files [[memory:4672947]]
+- **Automatic propagation**: Build script updates deployment scripts
+- **Version synchronization**: All components use same AMI ID
+
+### 2. Update Process Flow
+```
+1. Update source code (fast_transcribe.py, fast_transcribe.sh)
+   ↓
+2. Run build_ami.sh (creates new AMI + updates Lambda scripts)
+   ↓
+3. Deploy Lambda functions (deploy_lambda_functions.sh)
+   ↓
+4. Test transcription (upload audio to S3)
+   ↓
+5. Verify all components use new AMI
+```
+
+### 3. Component Synchronization
+- **fast_transcribe.py**: `EXPECTED_AMI_ID` constant (line 23)
+- **lambda_process_upload.py**: `AMI_ID` environment variable
+- **deploy_lambda_functions.sh**: Hardcoded AMI ID constant (line 11)
+- **build_ami.sh**: Automatic sed replacement during AMI creation
+
+### 4. Verification Points
+- New AMI ID logged in build output
+- Lambda environment variables updated
+- EC2 instances launch with correct AMI
+- CloudWatch logs show expected AMI ID
+- Transcription completes successfully 

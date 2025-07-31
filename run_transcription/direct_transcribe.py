@@ -27,7 +27,12 @@ class DirectTranscriber:
         self.model = model
         self.processor = processor
         self.device = next(model.parameters()).device
+        self.model_dtype = next(model.parameters()).dtype
         self.model_id = "KBLab/kb-whisper-small"
+        
+        # Ensure model is in evaluation mode and using consistent dtype
+        self.model.eval()
+        log_msg(f"Model dtype: {self.model_dtype}")
         
         # Optimal generation parameters for speed
         self.generation_config = {
@@ -91,6 +96,10 @@ class DirectTranscriber:
             sampling_rate=sr, 
             return_tensors="pt"
         ).to(self.device)
+        
+        # Ensure input features match model dtype to prevent type mismatch errors
+        model_dtype = next(self.model.parameters()).dtype
+        inputs["input_features"] = inputs["input_features"].to(dtype=model_dtype)
         
         feature_time = time.time() - feature_start
         log_msg(f"✓ Features processed: {feature_time:.3f}s")

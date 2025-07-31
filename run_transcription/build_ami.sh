@@ -170,11 +170,9 @@ sleep 30
 # Update system with retry logic
 retry_apt_operation "apt-get update -y" || exit 1
 
-# Verify package database is working
-if ! apt-cache search build-essential | grep -q "build-essential"; then
-    add-apt-repository universe -y > /dev/null 2>&1 || true
-    retry_apt_operation "apt-get update -y" || exit 1
-fi
+# Verify package database is working  
+add-apt-repository universe -y > /dev/null 2>&1 || true
+retry_apt_operation "apt-get update -y" || exit 1
 
 # Install kernel headers first
 KERNEL_VERSION=$(uname -r)
@@ -188,18 +186,13 @@ fi
 # Upgrade system packages
 retry_apt_operation "DEBIAN_FRONTEND=noninteractive apt-get upgrade -y" || exit 1
 
-# Install essential packages for transcription
+# Install essential packages for transcription - minimal set only (~835MB total savings)
 retry_apt_operation "apt-get install -y \
-    build-essential \
     dkms \
     python3-pip \
     python3-venv \
-    python3-dev \
-    ffmpeg \
     curl \
-    wget \
-    awscli \
-    jq" || exit 1
+    awscli" || exit 1
 
 # Verify kernel headers
 if [ ! -d "/lib/modules/$KERNEL_VERSION/build" ]; then
@@ -210,21 +203,15 @@ fi
 # Install NVIDIA drivers with DKMS support
 echo "[$(date)] Installing NVIDIA drivers..."
 
-# Install ubuntu-drivers-common for automatic driver detection
-if ! retry_apt_operation "DEBIAN_FRONTEND=noninteractive apt-get install -y ubuntu-drivers-common"; then
-    echo "ERROR: Failed to install ubuntu-drivers-common"
-    exit 1
-fi
-
-echo "[$(date)] Available NVIDIA drivers:"
-ubuntu-drivers devices || echo "Warning: Failed to list available drivers"
+# Skip ubuntu-drivers-common to save ~50MB - install driver directly
+echo "[$(date)] Installing NVIDIA driver directly without ubuntu-drivers-common"
 
 # Install specific NVIDIA driver version for better compatibility
 echo "[$(date)] Installing NVIDIA driver 535..."
 if ! retry_apt_operation "DEBIAN_FRONTEND=noninteractive apt-get install -y nvidia-driver-535 nvidia-dkms-535"; then
     echo "ERROR: Failed to install NVIDIA driver 535"
-    echo "Attempting to install recommended driver..."
-    if ! retry_apt_operation "DEBIAN_FRONTEND=noninteractive apt-get install -y \$(ubuntu-drivers devices | grep 'driver.*recommended' | awk '{print \$3}' | head -1)"; then
+    echo "Attempting to install alternative driver version..."
+    if ! retry_apt_operation "DEBIAN_FRONTEND=noninteractive apt-get install -y nvidia-driver-470 nvidia-dkms-470"; then
         echo "ERROR: Failed to install any NVIDIA driver"
         exit 1
     fi
@@ -304,17 +291,15 @@ echo "[$(date)] Setting up Python environment..."
 
 # Create transcription directory structure
 mkdir -p /opt/transcribe/{scripts,models,cache,logs}
-mkdir -p /opt/transcription
 chown -R ubuntu:ubuntu /opt/transcribe
-chown -R ubuntu:ubuntu /opt/transcription
 
 # Create Python virtual environment
 sudo -u ubuntu python3 -m venv /opt/transcribe/venv
 
-# Install Python dependencies
+# Install Python dependencies - ultra-minimal set for transcription only
 sudo -u ubuntu /opt/transcribe/venv/bin/pip install --upgrade pip
-sudo -u ubuntu /opt/transcribe/venv/bin/pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-sudo -u ubuntu /opt/transcribe/venv/bin/pip install transformers accelerate librosa soundfile boto3
+sudo -u ubuntu /opt/transcribe/venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cu118
+sudo -u ubuntu /opt/transcribe/venv/bin/pip install transformers librosa boto3
 
 echo "[$(date)] Python environment setup completed"
 SETUP_SCRIPT
@@ -642,12 +627,13 @@ create_transcription_script() {
     
     # Upload the fast_transcribe.sh script to the correct location
     if ! scp -i "${KEY_NAME}.pem" -o StrictHostKeyChecking=no \
-        "${SCRIPT_DIR}/fast_transcribe.sh" ubuntu@"$PUBLIC_IP":/opt/transcription/fast_transcribe.sh; then
+        "${SCRIPT_DIR}/fast_transcribe.sh" ubuntu@"$PUBLIC_IP":/opt/transcribe/fast_transcribe.sh; then
         handle_error "Failed to upload shell transcription script"
     fi
     
+    # Also copy to /opt/transcription/ for Lambda compatibility
     ssh -i "${KEY_NAME}.pem" -o StrictHostKeyChecking=no \
-        ubuntu@"$PUBLIC_IP" "chmod +x /opt/transcription/fast_transcribe.sh"
+        ubuntu@"$PUBLIC_IP" "sudo mkdir -p /opt/transcription && sudo chown ubuntu:ubuntu /opt/transcription && sudo cp /opt/transcribe/fast_transcribe.sh /opt/transcription/fast_transcribe.sh && sudo chown ubuntu:ubuntu /opt/transcription/fast_transcribe.sh && chmod +x /opt/transcribe/fast_transcribe.sh && chmod +x /opt/transcription/fast_transcribe.sh"
     
     # Simple script verification
     log "Verifying optimized scripts..."
@@ -678,7 +664,7 @@ echo -n "CUDA availability... "
 /opt/transcribe/venv/bin/python -c "import torch; assert torch.cuda.is_available()" &> /dev/null && echo "OK" || { echo "FAILED"; exit 1; }
 
 echo -n "Python dependencies... "
-/opt/transcribe/venv/bin/python -c "import transformers, librosa, soundfile" &> /dev/null && echo "OK" || { echo "FAILED"; exit 1; }
+/opt/transcribe/venv/bin/python -c "import transformers, librosa" &> /dev/null && echo "OK" || { echo "FAILED"; exit 1; }
 
 echo -n "Model cache... "
 [ -d /opt/transcribe/models ] && echo "OK" || { echo "FAILED"; exit 1; }
@@ -687,7 +673,7 @@ echo -n "GPU state... "
 [ -f /opt/transcribe/gpu_state/model_gpu_state.pt ] && echo "OK" || { echo "FAILED"; exit 1; }
 
 echo -n "Optimized scripts... "
-[ -f /opt/transcribe/fast_transcribe.py ] && [ -f /opt/transcribe/optimized_loader.py ] && [ -f /opt/transcribe/direct_transcribe.py ] && echo "OK" || { echo "FAILED"; exit 1; }
+[ -f /opt/transcribe/fast_transcribe.py ] && [ -f /opt/transcribe/optimized_loader.py ] && [ -f /opt/transcribe/direct_transcribe.py ] && [ -f /opt/transcribe/fast_transcribe.sh ] && [ -f /opt/transcription/fast_transcribe.sh ] && echo "OK" || { echo "FAILED"; exit 1; }
 
 # Simple completion marker
 echo "AMI_SETUP_COMPLETE=true" > /opt/transcribe/.setup_complete

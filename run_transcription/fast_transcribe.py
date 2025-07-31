@@ -21,7 +21,7 @@ from optimized_loader import OptimizedModelLoader
 from direct_transcribe import DirectTranscriber
 
 # AMI Configuration
-EXPECTED_AMI_ID = 'ami-051be79f88b9cbb42'  # Expected optimized GPU-enabled AMI for transcription processing
+EXPECTED_AMI_ID = 'ami-09925fd708c360135'  # Expected optimized GPU-enabled AMI for transcription processing
 
 # S3 integration
 try:
