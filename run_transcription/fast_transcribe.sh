@@ -104,7 +104,7 @@ aws dynamodb update-item \
 
 log_msg "Status updated to processing" "STATUS"
 
-# AMI verification - check critical components
+# AMI verification - minimal check for setup completion
 log_msg "Verifying AMI setup..." "STATUS"
 
 if [[ ! -f "/opt/transcribe/.setup_complete" ]]; then
@@ -113,39 +113,7 @@ if [[ ! -f "/opt/transcribe/.setup_complete" ]]; then
     exit 1
 fi
 
-# Check critical paths and dependencies
-MISSING_COMPONENTS=()
-
-if [[ ! -f "/opt/transcribe/fast_transcribe.py" ]]; then
-    MISSING_COMPONENTS+=("Python script: /opt/transcribe/fast_transcribe.py")
-fi
-
-if [[ ! -d "/opt/transcribe/venv" ]]; then
-    MISSING_COMPONENTS+=("Virtual environment: /opt/transcribe/venv")
-fi
-
-if [[ ! -d "/opt/transcribe/models" ]]; then
-    MISSING_COMPONENTS+=("Model cache: /opt/transcribe/models")
-fi
-
-if [[ ! -f "/opt/transcribe/gpu_state/model_gpu_state.pt" ]]; then
-    MISSING_COMPONENTS+=("GPU state: /opt/transcribe/gpu_state/model_gpu_state.pt")
-fi
-
-if [[ ! -d "/opt/transcribe/gpu_state/processor" ]]; then
-    MISSING_COMPONENTS+=("GPU processor: /opt/transcribe/gpu_state/processor")
-fi
-
-if [[ ${#MISSING_COMPONENTS[@]} -gt 0 ]]; then
-    log_msg "ERROR: Missing AMI components:" "ERROR"
-    for component in "${MISSING_COMPONENTS[@]}"; do
-        log_msg "  - $component" "ERROR"
-    done
-    log_msg "AMI $AMI_ID appears to be incomplete" "ERROR"
-    exit 1
-fi
-
-log_msg "AMI verified - all dependencies ready"
+log_msg "AMI verified - setup complete"
 
 # Setup working directory
 cd /opt/transcribe
@@ -174,35 +142,12 @@ log_msg "Downloaded: $FILE_SIZE bytes"
 
 # Activate virtual environment (pre-installed)
 log_msg "Activating virtual environment..." "STATUS"
-
-if [[ ! -f "/opt/transcribe/venv/bin/activate" ]]; then
-    log_msg "ERROR: Virtual environment activation script missing" "ERROR"
-    log_msg "Expected: /opt/transcribe/venv/bin/activate" "ERROR"
-    exit 1
-fi
-
-if ! source /opt/transcribe/venv/bin/activate; then
-    log_msg "ERROR: Failed to activate virtual environment" "ERROR"
-    exit 1
-fi
-
-# Verify Python environment
-if ! command -v python3 &> /dev/null; then
-    log_msg "ERROR: Python3 not available after venv activation" "ERROR"
-    exit 1
-fi
-
+source /opt/transcribe/venv/bin/activate
 log_msg "Virtual environment activated successfully"
 
 # Start transcription immediately
 log_msg "=== Starting Transcription ===" "STATUS"
 START_TIME=$(date +%s)
-
-# Verify transcription script exists
-if [[ ! -f "/opt/transcribe/fast_transcribe.py" ]]; then
-    log_msg "ERROR: Transcription script missing: /opt/transcribe/fast_transcribe.py" "ERROR"
-    exit 1
-fi
 
 # Verify audio file exists before transcription
 if [[ ! -f "$STANDARDIZED_FILENAME" ]]; then

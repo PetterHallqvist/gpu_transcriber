@@ -299,7 +299,7 @@ sudo -u ubuntu python3 -m venv /opt/transcribe/venv
 # Install Python dependencies - ultra-minimal set for transcription only
 sudo -u ubuntu /opt/transcribe/venv/bin/pip install --upgrade pip
 sudo -u ubuntu /opt/transcribe/venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cu118
-sudo -u ubuntu /opt/transcribe/venv/bin/pip install transformers librosa boto3
+sudo -u ubuntu /opt/transcribe/venv/bin/pip install transformers librosa boto3 numpy
 
 echo "[$(date)] Python environment setup completed"
 SETUP_SCRIPT
@@ -603,17 +603,7 @@ create_transcription_script() {
         handle_error "Failed to upload Python transcription script"
     fi
     
-    # Upload optimized components
-    if ! scp -i "${KEY_NAME}.pem" -o StrictHostKeyChecking=no \
-        "${SCRIPT_DIR}/optimized_loader.py" ubuntu@"$PUBLIC_IP":/opt/transcribe/optimized_loader.py; then
-        handle_error "Failed to upload optimized loader"
-    fi
-    
-    if ! scp -i "${KEY_NAME}.pem" -o StrictHostKeyChecking=no \
-        "${SCRIPT_DIR}/direct_transcribe.py" ubuntu@"$PUBLIC_IP":/opt/transcribe/direct_transcribe.py; then
-        handle_error "Failed to upload direct transcriber"
-    fi
-    
+    # Upload GPU memory persistence script
     if ! scp -i "${KEY_NAME}.pem" -o StrictHostKeyChecking=no \
         "${SCRIPT_DIR}/gpu_memory_persist.py" ubuntu@"$PUBLIC_IP":/opt/transcribe/gpu_memory_persist.py; then
         handle_error "Failed to upload GPU memory persistence script"
@@ -673,7 +663,7 @@ echo -n "GPU state... "
 [ -f /opt/transcribe/gpu_state/model_gpu_state.pt ] && echo "OK" || { echo "FAILED"; exit 1; }
 
 echo -n "Optimized scripts... "
-[ -f /opt/transcribe/fast_transcribe.py ] && [ -f /opt/transcribe/optimized_loader.py ] && [ -f /opt/transcribe/direct_transcribe.py ] && [ -f /opt/transcribe/fast_transcribe.sh ] && [ -f /opt/transcription/fast_transcribe.sh ] && echo "OK" || { echo "FAILED"; exit 1; }
+[ -f /opt/transcribe/fast_transcribe.py ] && [ -f /opt/transcribe/fast_transcribe.sh ] && [ -f /opt/transcription/fast_transcribe.sh ] && echo "OK" || { echo "FAILED"; exit 1; }
 
 # Simple completion marker
 echo "AMI_SETUP_COMPLETE=true" > /opt/transcribe/.setup_complete

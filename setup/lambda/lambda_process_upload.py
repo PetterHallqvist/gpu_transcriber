@@ -17,7 +17,7 @@ s3 = boto3.client('s3')
 S3_BUCKET = "transcription-curevo"
 S3_PREFIX = "transcription_upload/"
 DYNAMODB_TABLE = os.environ.get('DYNAMODB_TABLE', 'transcription-jobs')
-AMI_ID = os.environ['AMI_ID']  # Required environment variable
+AMI_ID = 'ami-07b4591c8d4465006'  # Updated AMI with optimized dependencies
 
 def log(message):
     """Log message with timestamp."""
@@ -105,10 +105,12 @@ def lambda_handler(event, context):
         bucket_name = s3_event['bucket']['name']
         s3_key = urllib.parse.unquote(s3_event['object']['key'])
         
-        # Validate bucket, prefix, and file type
+        # Simple validation: only process original uploads, not processed files
+        filename = s3_key.replace(S3_PREFIX, '')
         if (bucket_name != S3_BUCKET or 
             not s3_key.startswith(S3_PREFIX) or
-            not s3_key.lower().endswith(('.mp3', '.wav', '.m4a', '.flac'))):
+            not s3_key.lower().endswith(('.mp3', '.wav', '.m4a', '.flac')) or
+            filename.split('_')[0].isdigit()):  # Skip timestamped files
             return {'statusCode': 200, 'body': json.dumps({'message': 'Ignored'})}
         
         # Generate standardized filename

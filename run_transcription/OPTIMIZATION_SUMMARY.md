@@ -92,11 +92,8 @@ cd run_transcription
 # Test GPU memory persistence
 python gpu_memory_persist.py
 
-# Test loading strategies  
-python optimized_loader.py test
-
-# Test direct transcription (requires loaded model)
-python direct_transcribe.py audio_file.wav
+# Test complete transcription with all optimizations
+python fast_transcribe.py audio_file.wav
 ```
 
 ## Key Benefits

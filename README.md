@@ -45,8 +45,7 @@ run_transcription/
 ├── fast_transcribe.sh          # Main EC2 startup script (runs on instance)
 ├── fast_transcribe.py          # Python transcription engine
 ├── build_ami.sh               # AMI builder with dependency installation
-├── optimized_loader.py        # Optimized model loading strategies
-├── direct_transcribe.py       # Direct transcription without pipeline
+├── fast_transcribe.py         # Complete transcription solution with all optimizations
 └── gpu_memory_persist.py      # GPU memory optimization utilities
 ```
 
