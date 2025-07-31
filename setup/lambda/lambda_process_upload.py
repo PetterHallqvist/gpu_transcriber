@@ -5,6 +5,7 @@ import json
 import boto3
 import os
 import uuid
+import urllib.parse
 from datetime import datetime
 from botocore.exceptions import ClientError
 
@@ -107,6 +108,61 @@ def get_working_subnet():
         # Fallback to hardcoded subnet for eu-north-1a
         log("Warning: SUBNET_ID not set, using fallback subnet")
         return "subnet-0e18482f4c0b1d4ac"
+
+def fix_s3_object_permissions(bucket_name, s3_key):
+    """Fix S3 object permissions to ensure EC2 instance can access the file."""
+    try:
+        log(f"Fixing S3 object permissions for: s3://{bucket_name}/{s3_key}")
+        
+        # Set object ACL to bucket-owner-full-control to ensure EC2 instance can access
+        s3.put_object_acl(
+            Bucket=bucket_name,
+            Key=s3_key,
+            ACL='bucket-owner-full-control'
+        )
+        
+        log(f"S3 object permissions fixed successfully for: s3://{bucket_name}/{s3_key}")
+        return True
+        
+    except ClientError as e:
+        error_code = e.response['Error']['Code']
+        if error_code == 'NoSuchKey':
+            log(f"Warning: S3 object not found: s3://{bucket_name}/{s3_key}")
+            log("This may be due to URL encoding issues - trying to find the actual key...")
+            
+            # Try to find the actual key by listing objects with similar names
+            try:
+                prefix = s3_key.rsplit('/', 1)[0] + '/' if '/' in s3_key else ''
+                response = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
+                
+                if 'Contents' in response:
+                    for obj in response['Contents']:
+                        decoded_key = urllib.parse.unquote(obj['Key'])
+                        if decoded_key == s3_key:
+                            log(f"Found URL-encoded key: {obj['Key']}")
+                            # Fix permissions on the actual URL-encoded key
+                            s3.put_object_acl(
+                                Bucket=bucket_name,
+                                Key=obj['Key'],
+                                ACL='bucket-owner-full-control'
+                            )
+                            log(f"Fixed permissions on URL-encoded key: {obj['Key']}")
+                            return True
+            except Exception as list_error:
+                log(f"Error listing objects: {list_error}")
+            
+            return False
+        elif error_code == 'AccessDenied':
+            log(f"Warning: Cannot modify S3 object ACL (Access Denied): s3://{bucket_name}/{s3_key}")
+            log("This may be due to bucket policy restrictions, but EC2 should still be able to access")
+            return True  # Consider this a success since EC2 might still have access
+        else:
+            log(f"Error fixing S3 object permissions: {e}")
+            return False
+    except Exception as e:
+        log(f"Unexpected error fixing S3 object permissions: {e}")
+        return False
+
 
 def create_or_get_security_group():
     """Create or get security group with proper rules for transcription."""
@@ -292,9 +348,15 @@ def lambda_handler(event, context):
         # Extract S3 event
         s3_event = event['Records'][0]['s3']
         bucket_name = s3_event['bucket']['name']
-        s3_key = s3_event['object']['key']
+        original_s3_key = s3_event['object']['key']
         
-        log(f"Bucket: {bucket_name}, Key: {s3_key}")
+        # URL-decode the S3 key to handle special characters uploaded via S3 console
+        s3_key = urllib.parse.unquote(original_s3_key)
+        
+        if original_s3_key != s3_key:
+            log(f"URL-decoded S3 key: '{original_s3_key}' -> '{s3_key}'")
+        
+        log(f"Original S3 key: {s3_key}")
         
         # Validate bucket and prefix
         if bucket_name != S3_BUCKET or not s3_key.startswith(S3_PREFIX):
@@ -305,6 +367,45 @@ def lambda_handler(event, context):
         if not s3_key.lower().endswith(('.mp3', '.wav', '.m4a', '.flac')):
             log(f"Ignoring non-audio file: {s3_key}")
             return {'statusCode': 200, 'body': json.dumps({'message': 'Not audio file'})}
+        
+        # Generate standardized filename to avoid URL encoding issues
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        file_uuid = str(uuid.uuid4())[:8]  # Use first 8 characters of UUID
+        file_extension = s3_key.split('.')[-1].lower()
+        original_filename = s3_key.split('/')[-1] if '/' in s3_key else s3_key
+        
+        # Create standardized filename
+        standardized_filename = f"transcription_{timestamp}_{file_uuid}.{file_extension}"
+        new_s3_key = f"{S3_PREFIX}{standardized_filename}"
+        
+        log(f"Original filename: {original_filename}")
+        log(f"Standardized filename: {standardized_filename}")
+        log(f"New S3 key: {new_s3_key}")
+        
+        # Rename the file in S3 to avoid URL encoding issues
+        try:
+            log(f"Renaming file from {s3_key} to {new_s3_key}")
+            s3.copy_object(
+                Bucket=bucket_name,
+                CopySource={'Bucket': bucket_name, 'Key': s3_key},
+                Key=new_s3_key,
+                Metadata={
+                    'original-filename': original_filename,
+                    'original-s3-key': s3_key,
+                    'upload-timestamp': datetime.now().isoformat()
+                }
+            )
+            
+            # Delete the original file
+            s3.delete_object(Bucket=bucket_name, Key=s3_key)
+            log(f"Successfully renamed file to: {new_s3_key}")
+            
+            # Update s3_key to use the new standardized key
+            s3_key = new_s3_key
+            
+        except Exception as e:
+            log(f"Warning: Failed to rename file, proceeding with original key: {e}")
+            # Continue with original key if rename fails
         
         # Ensure DynamoDB table exists before processing
         log("Ensuring DynamoDB table exists...")
@@ -329,8 +430,32 @@ def lambda_handler(event, context):
         filename = s3_key.split('/')[-1] if '/' in s3_key else s3_key
         log(f"Processing file: {filename}")
         
+        # Fix S3 object permissions to ensure EC2 instance can access the file
+        # This is critical for files uploaded via S3 console vs CLI
+        log("Fixing S3 object permissions...")
+        permissions_fixed = fix_s3_object_permissions(bucket_name, s3_key)
+        if not permissions_fixed:
+            log("Warning: Could not fix S3 object permissions, proceeding anyway")
+        
+        # Create job record with both original and standardized information
         if not create_job_record(job_id, s3_key, callback_url=callback_url, callback_secret=callback_secret):
             raise Exception("Failed to create job record")
+        
+        # Store original filename information in DynamoDB for reference
+        try:
+            dynamodb.update_item(
+                TableName=DYNAMODB_TABLE,
+                Key={'job_id': {'S': job_id}},
+                UpdateExpression="SET original_filename = :orig_filename, original_s3_key = :orig_key, standardized_filename = :std_filename",
+                ExpressionAttributeValues={
+                    ':orig_filename': {'S': original_filename},
+                    ':orig_key': {'S': original_s3_key},
+                    ':std_filename': {'S': standardized_filename}
+                }
+            )
+            log(f"Stored original filename: {original_filename}")
+        except Exception as e:
+            log(f"Warning: Failed to store original filename info: {e}")
         
         # Launch EC2 instance
         instance_id = launch_ec2_instance(job_id, s3_key)

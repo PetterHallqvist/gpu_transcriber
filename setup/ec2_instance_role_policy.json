@@ -3,12 +3,17 @@
     "Statement": [
         {
             "Effect": "Allow",
-            "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+            "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:HeadObject", "s3:ListBucket"],
             "Resource": [
                 "arn:aws:s3:::transcription-curevo/transcription_upload/*",
                 "arn:aws:s3:::transcription-curevo/results/*",
                 "arn:aws:s3:::transcription-curevo/transcription_results/*"
             ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": ["s3:ListBucket"],
+            "Resource": "arn:aws:s3:::transcription-curevo"
         },
         {
             "Effect": "Allow",

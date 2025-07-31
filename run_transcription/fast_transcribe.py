@@ -10,6 +10,7 @@ import sys
 import time
 import os
 import json
+import uuid
 from pathlib import Path
 from datetime import datetime
 
@@ -188,10 +189,10 @@ class FastTranscriber:
         try:
             job_id = os.environ.get('JOB_ID', 'unknown')
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            audio_basename = Path(audio_file).stem
+            file_uuid = str(uuid.uuid4())[:8]  # Use first 8 characters of UUID
             
-            # Use dedicated transcription_results folder for better organization
-            s3_key = f"transcription_results/{job_id}/transcription_{timestamp}_{audio_basename}.{file_type}"
+            # Use standardized format: trans_DATE_TIME_UUID
+            s3_key = f"transcription_results/{job_id}/trans_{timestamp}_{file_uuid}.{file_type}"
             
             log_msg(f"Uploading to S3: s3://{self.s3_bucket}/{s3_key}")
             
@@ -213,8 +214,11 @@ class FastTranscriber:
     def save_result(self, result, audio_file, load_time, transcribe_time):
         """Save transcription result with enhanced JSON structure."""
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_file = f"transcription_{timestamp}.txt"
-        json_file = f"transcription_{timestamp}.json"
+        file_uuid = str(uuid.uuid4())[:8]  # Use first 8 characters of UUID
+        
+        # Use standardized format: trans_DATE_TIME_UUID
+        output_file = f"trans_{timestamp}_{file_uuid}.txt"
+        json_file = f"trans_{timestamp}_{file_uuid}.json"
         job_id = os.environ.get('JOB_ID', 'unknown')
         audio_basename = Path(audio_file).stem
         
@@ -257,8 +261,8 @@ class FastTranscriber:
                 'version': '1.0'
             },
             's3_locations': {
-                'json_result': f"s3://{self.s3_bucket}/transcription_results/{job_id}/transcription_{timestamp}_{audio_basename}.json",
-                'text_backup': f"s3://{self.s3_bucket}/transcription_results/{job_id}/transcription_{timestamp}_{audio_basename}.txt"
+                'json_result': f"s3://{self.s3_bucket}/transcription_results/{job_id}/trans_{timestamp}_{file_uuid}.json",
+                'text_backup': f"s3://{self.s3_bucket}/transcription_results/{job_id}/trans_{timestamp}_{file_uuid}.txt"
             }
         }
         

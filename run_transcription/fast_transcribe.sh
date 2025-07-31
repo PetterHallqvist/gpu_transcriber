@@ -238,26 +238,12 @@ CALLBACK_URL=$(aws dynamodb get-item \
 if [[ -n "$CALLBACK_URL" && "$CALLBACK_URL" != "None" ]]; then
     log_msg "Sending webhook via Lambda..."
     
-    # Get transcription text and S3 URLs
+    # Get transcription text
     TRANSCRIPTION_TEXT=""
-    S3_JSON_URL=""
-    S3_TXT_URL=""
-    
     if ls transcription_*.txt 1> /dev/null 2>&1; then
         LATEST_FILE=$(ls -t transcription_*.txt | head -1)
         if [[ -n "$LATEST_FILE" ]]; then
             TRANSCRIPTION_TEXT=$(sed -n '/=== TRANSCRIPTION ===/,$p' "$LATEST_FILE" | tail -n +2 | tr '\n' ' ' | sed 's/"/\\"/g')
-        fi
-    fi
-    
-    # Extract S3 URLs from Python script output
-    if ls transcription_*.json 1> /dev/null 2>&1; then
-        LATEST_JSON=$(ls -t transcription_*.json | head -1)
-        if [[ -n "$LATEST_JSON" ]]; then
-            TIMESTAMP=$(echo "$LATEST_JSON" | sed 's/transcription_\([0-9_]*\)\.json/\1/')
-            AUDIO_BASENAME=$(echo "$S3_KEY" | sed 's/.*\///;s/\.[^.]*$//')
-            S3_JSON_URL="s3://$S3_BUCKET/transcription_results/$JOB_ID/transcription_${TIMESTAMP}_${AUDIO_BASENAME}.json"
-            S3_TXT_URL="s3://$S3_BUCKET/transcription_results/$JOB_ID/transcription_${TIMESTAMP}_${AUDIO_BASENAME}.txt"
         fi
     fi
     
@@ -267,17 +253,13 @@ if [[ -n "$CALLBACK_URL" && "$CALLBACK_URL" != "None" ]]; then
     
     TOTAL_TIME=$(($(date +%s) - START_TIME))
     
-    # Enhanced webhook payload with S3 locations
+    # Prepare webhook payload
     WEBHOOK_PAYLOAD="{
         \"job_id\": \"$JOB_ID\",
         \"status\": \"$FINAL_STATUS\",
         \"transcript\": \"$TRANSCRIPTION_TEXT\",
         \"processing_time\": \"${TOTAL_TIME}s\",
-        \"file_size\": \"$FILE_SIZE\",
-        \"s3_results\": {
-            \"json_url\": \"$S3_JSON_URL\",
-            \"text_url\": \"$S3_TXT_URL\"
-        }
+        \"file_size\": \"$FILE_SIZE\"
     }"
     
     # Invoke Lambda for webhook delivery
@@ -291,7 +273,7 @@ if [[ -n "$CALLBACK_URL" && "$CALLBACK_URL" != "None" ]]; then
         --region "$REGION" \
         /tmp/webhook_response.json >/dev/null 2>&1 || log_msg "Warning: Lambda webhook invocation failed"
     
-    log_msg "Webhook sent via Lambda with S3 locations"
+    log_msg "Webhook sent via Lambda"
 fi
 
 
