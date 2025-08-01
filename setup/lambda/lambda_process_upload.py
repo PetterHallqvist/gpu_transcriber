@@ -17,7 +17,7 @@ s3 = boto3.client('s3')
 S3_BUCKET = "transcription-curevo"
 S3_PREFIX = "transcription_upload/"
 DYNAMODB_TABLE = os.environ.get('DYNAMODB_TABLE', 'transcription-jobs')
-AMI_ID = 'ami-07b4591c8d4465006'  # Updated AMI with optimized dependencies
+AMI_ID = 'ami-0cc18c2cbbbc4736c'  # Updated streamlined AMI with pre-compiled model state
 
 def log(message):
     """Log message with timestamp."""

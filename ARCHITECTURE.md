@@ -186,11 +186,9 @@ transcription-curevo/
 ```
 run_transcription/
 ├── fast_transcribe.sh          # Main EC2 startup script (runs on instance)
-├── fast_transcribe.py          # Python transcription engine
-├── build_ami.sh               # AMI builder with dependency installation
-├── fast_transcribe.py         # Complete transcription solution with all optimizations
-├── gpu_memory_persist.py      # GPU memory optimization utilities
-└── test_model_cache.py        # Model caching verification
+├── fast_transcribe.py          # Python transcription engine with pre-compiled state
+├── build_ami.sh               # AMI builder with pre-compiled model state creation
+└── OPTIMIZATION_SUMMARY.md    # Performance optimization documentation
 ```
 
 ### AWS Infrastructure Setup
@@ -213,11 +211,11 @@ setup/
 ```
 
 ### AMI Management & Dependencies
-- **Production AMI**: `ami-0d090b80bc56081ba` (optimized with pre-cached models, CUDA, dependencies)
+- **Production AMI**: `ami-0398e6a059f8209a3` (optimized with pre-compiled model state, CUDA, dependencies)
 - **Build Source**: `ami-0989fb15ce71ba39e` (clean Ubuntu 22.04 LTS used only for AMI construction)
 - **Region**: `eu-north-1` (Stockholm)
 - **Build Process**: `build_ami.sh` transforms Build Source → Production AMI
-- **Dependencies**: Pre-cached models, CUDA kernels, optimized Python environment
+- **Dependencies**: Pre-compiled model state, CUDA kernels, optimized Python environment
 
 *The Production AMI is the only one that matters for running transcriptions. The Build Source is just the starting material for creating new Production AMIs.*
 

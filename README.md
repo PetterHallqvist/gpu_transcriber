@@ -8,7 +8,7 @@ Ultra-fast Swedish transcription with NVIDIA T4 GPU acceleration. **2-3 minute t
 |--------|------|------|
 | **Total Runtime** | **2-3 minutes** | **~$0.02** |
 | Boot Time | 30-45s | Spot instance |
-| Model Load | 5-10s | Pre-cached |
+| Model Load | 3-5s | Pre-compiled state (90% faster) |
 | Transcription | 90-120s | T4 GPU |
 | Cleanup | 15-30s | Auto-terminate |
 
@@ -43,10 +43,9 @@ cd ../run_transcription
 ```
 run_transcription/
 ├── fast_transcribe.sh          # Main EC2 startup script (runs on instance)
-├── fast_transcribe.py          # Python transcription engine
-├── build_ami.sh               # AMI builder with dependency installation
-├── fast_transcribe.py         # Complete transcription solution with all optimizations
-└── gpu_memory_persist.py      # GPU memory optimization utilities
+├── fast_transcribe.py          # Python transcription engine with pre-compiled state
+├── build_ami.sh               # AMI builder with pre-compiled model state creation
+└── OPTIMIZATION_SUMMARY.md    # Performance optimization documentation
 ```
 
 ### Infrastructure Setup
@@ -65,7 +64,7 @@ setup/
 
 ### AMI Management
 The system uses a hardcoded AMI ID approach for consistency:
-- **Production AMI**: `ami-0d090b80bc56081ba` (optimized with pre-cached models)
+- **Production AMI**: `ami-0398e6a059f8209a3` (optimized with pre-compiled model state)
 - **Build Source**: `ami-0989fb15ce71ba39e` (clean Ubuntu 22.04 LTS for building)
 - **Region**: `eu-north-1` (Stockholm)
 

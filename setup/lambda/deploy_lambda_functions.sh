@@ -8,7 +8,7 @@ S3_BUCKET="transcription-curevo"
 DYNAMODB_TABLE="transcription-jobs"
 LAMBDA_ROLE_NAME="TranscriptionLambdaRole"
 EC2_ROLE_NAME="EC2TranscriptionRole"
-AMI_ID="ami-07b4591c8d4465006"  # Updated optimized GPU-enabled AMI for transcription processing
+AMI_ID="ami-0cc18c2cbbbc4736c"  # Updated streamlined GPU-enabled AMI with pre-compiled model state
 
 log() {
     echo -e "\033[0;32m[$(date +'%Y-%m-%d %H:%M:%S')] $1\033[0m"
