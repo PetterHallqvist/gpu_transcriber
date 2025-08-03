@@ -23,7 +23,7 @@ def log_msg(message):
 log_msg("=== PYTHON SCRIPT START ===")
 
 # AMI Configuration
-EXPECTED_AMI_ID = 'ami-0862833fe45c7055b'  # Optimized GPU AMI with pre-cached models
+EXPECTED_AMI_ID = 'ami-0f1c8be6b5b1a2cc6'  # Optimized GPU AMI with pre-cached models
 
 
 class FastTranscriber:

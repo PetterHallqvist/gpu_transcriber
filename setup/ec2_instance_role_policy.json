@@ -50,6 +50,13 @@
                 "arn:aws:logs:*:*:log-group:/aws/ec2/transcription",
                 "arn:aws:logs:*:*:log-group:/aws/ec2/transcription:log-stream:*"
             ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ec2:DescribeTags"
+            ],
+            "Resource": "*"
         }
     ]
 } 

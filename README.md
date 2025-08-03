@@ -29,8 +29,7 @@ cd lambda
 ./deploy_lambda_functions.sh
 cd ..
 
-# 4. Setup API Gateway (optional)
-./setup_api_gateway.sh
+
 
 # 5. Transcribe audio
 cd ../run_transcription
@@ -52,13 +51,12 @@ run_transcription/
 ```
 setup/
 ├── setup_infrastructure.sh    # AWS resources (S3, IAM, security groups)
-├── setup_api_gateway.sh       # API Gateway configuration
+
 ├── cleanup_transcription_instances.sh  # Cleanup utility
 ├── ec2_instance_role_policy.json      # EC2 permissions
 └── lambda/
     ├── deploy_lambda_functions.sh     # Lambda deployment with AMI updates
     ├── lambda_process_upload.py       # S3 trigger handler
-    ├── lambda_api.py                  # API endpoint handler
     └── lambda_execution_role_policy.json
 ```
 
@@ -149,7 +147,6 @@ Client → API Gateway → Lambda → S3 → EC2 (T4 GPU) → DynamoDB → Webho
 | Function | Purpose | Trigger | AMI Dependency |
 |----------|---------|---------|----------------|
 | `TranscriptionProcessUpload` | Orchestrate transcription | S3 upload | Uses AMI_ID env var |
-| `TranscriptionAPI` | Register callbacks | HTTP API | None |
 
 ## Production Features
 
@@ -180,12 +177,7 @@ Client → API Gateway → Lambda → S3 → EC2 (T4 GPU) → DynamoDB → Webho
 # Returns: transcription_YYYYMMDD_HHMMSS.txt
 ```
 
-### **API Server** (Optional)
-```bash
-cd setup
-./setup_api_gateway.sh
-# Endpoint: /api (callback registration)
-```
+
 
 ### **Webhook Notifications**
 The system automatically sends webhook notifications when transcription completes:

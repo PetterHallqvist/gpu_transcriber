@@ -46,9 +46,7 @@
             "Action": [
                 "ec2:RunInstances", "ec2:CreateTags", "ec2:DescribeInstances", 
                 "ec2:TerminateInstances", "ec2:DescribeSecurityGroups", 
-                "ec2:DescribeSubnets", "ec2:DescribeVpcs", "ec2:DescribeTags",
-                "ec2:DescribeImages", "ec2:CreateSecurityGroup", "ec2:AuthorizeSecurityGroupIngress",
-                "ec2:AuthorizeSecurityGroupEgress"
+                "ec2:DescribeSubnets", "ec2:DescribeVpcs", "ec2:DescribeTags"
             ],
             "Resource": "*"
         },

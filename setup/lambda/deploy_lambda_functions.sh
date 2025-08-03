@@ -8,7 +8,8 @@ S3_BUCKET="transcription-curevo"
 DYNAMODB_TABLE="transcription-jobs"
 LAMBDA_ROLE_NAME="TranscriptionLambdaRole"
 EC2_ROLE_NAME="EC2TranscriptionRole"
-AMI_ID="ami-0cc18c2cbbbc4736c"  # Updated streamlined GPU-enabled AMI with pre-compiled model state
+
+AMI_ID="ami-0862833fe45c7055b"
 
 log() {
     echo -e "\033[0;32m[$(date +'%Y-%m-%d %H:%M:%S')] $1\033[0m"
@@ -108,7 +109,6 @@ create_package() {
 }
 
 create_package "TranscriptionProcessUpload" "lambda_process_upload.py"
-create_package "TranscriptionAPI" "lambda_api.py"
 
 # Deploy Lambda functions
 deploy_function() {
@@ -150,7 +150,6 @@ deploy_function() {
 }
 
 deploy_function "TranscriptionProcessUpload" "TranscriptionProcessUpload.zip" "lambda_process_upload.lambda_handler" 300 1024
-deploy_function "TranscriptionAPI" "TranscriptionAPI.zip" "lambda_api.lambda_handler" 60 512
 
 # Set environment variables
 log "Setting environment variables..."
@@ -219,9 +218,7 @@ update_env_vars_if_needed() {
 PROCESS_UPLOAD_ENV="{DYNAMODB_TABLE=$DYNAMODB_TABLE,AMI_ID=$AMI_ID,INSTANCE_TYPE=g4dn.xlarge,SECURITY_GROUP_ID=$SECURITY_GROUP_ID,SUBNET_ID=$SUBNET_ID,IAM_ROLE_NAME=$IAM_ROLE_NAME}"
 update_env_vars_if_needed "TranscriptionProcessUpload" "$PROCESS_UPLOAD_ENV"
 
-# Update TranscriptionAPI Lambda environment variables
-API_ENV="{DYNAMODB_TABLE=$DYNAMODB_TABLE}"
-update_env_vars_if_needed "TranscriptionAPI" "$API_ENV"
+
 
 # Setup CloudWatch Logs
 log "Setting up CloudWatch Logs..."
@@ -363,7 +360,6 @@ log ""
 log "Next steps:"
 log "1. If any environment variables show as empty above, run:"
 log "   ./verify_lambda_env.sh"
-log "2. Run API Gateway setup:"
-log "   chmod +x ../setup_api_gateway.sh && ../setup_api_gateway.sh"
+
 log ""
 log "3. Test by uploading an MP3 file to s3://$S3_BUCKET/transcription_upload/" 

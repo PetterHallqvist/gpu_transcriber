@@ -215,7 +215,7 @@ main() {
     log_msg "Next steps:"
     log_msg "1. Run setup_dynamodb.sh for DynamoDB setup"
     log_msg "2. Run deploy_lambda_functions.sh for Lambda setup"
-    log_msg "3. Run setup_api_gateway.sh for API Gateway setup"
+    
     log_msg "4. Run fast_transcribe.sh to start transcription"
 }
 
