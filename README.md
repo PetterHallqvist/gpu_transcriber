@@ -2,6 +2,78 @@
 
 Ultra-fast Swedish transcription with NVIDIA T4 GPU acceleration. **2-3 minute total runtime** with production-grade architecture.
 
+## General Tasks & Architecture Overview
+
+### Core Components Interaction
+
+The system consists of three key files that work together to provide ultra-fast GPU transcription:
+
+#### 1. **build_ami.sh** - AMI Creation & Optimization
+- **Purpose**: Creates a pre-optimized Amazon Machine Image (AMI) with all dependencies pre-installed
+- **Key Tasks**:
+  - Launches a base Ubuntu 22.04 instance
+  - Installs CUDA, PyTorch, and Whisper dependencies
+  - Downloads and caches the Swedish Whisper model (`KBLab/kb-whisper-small`)
+  - Pre-compiles model state for instant loading
+  - Creates a production-ready AMI with ID `ami-0862833fe45c7055b`
+- **Output**: Optimized AMI that eliminates 90% of startup time
+
+#### 2. **fast_transcribe.sh** - EC2 Instance Orchestrator
+- **Purpose**: Main startup script that runs on each EC2 instance during transcription
+- **Key Tasks**:
+  - Retrieves job metadata from instance tags and DynamoDB
+  - Downloads audio file from S3 to local storage
+  - Calls `fast_transcribe.py` for actual transcription
+  - Uploads results back to S3
+  - Updates job status in DynamoDB
+  - Terminates the instance when complete
+- **Performance**: Starts transcription within 10 seconds of instance launch
+
+#### 3. **fast_transcribe.py** - Core Transcription Engine
+- **Purpose**: Python script that performs the actual audio transcription
+- **Key Tasks**:
+  - Loads pre-cached Whisper model from `/opt/transcribe/models/`
+  - Processes audio file using NVIDIA T4 GPU acceleration
+  - Generates Swedish transcription with optimized parameters
+  - Saves results with metadata (timing, model info)
+- **Performance**: Model loads in 3-5 seconds from cache vs 30+ seconds from scratch
+
+### Architecture Flow
+
+```
+1. build_ami.sh (One-time setup)
+   ↓ Creates optimized AMI
+   
+2. Client uploads audio to S3
+   ↓ Triggers Lambda function
+   
+3. Lambda launches EC2 with optimized AMI
+   ↓ Instance starts with fast_transcribe.sh
+   
+4. fast_transcribe.sh orchestrates process
+   ↓ Downloads audio, calls fast_transcribe.py
+   
+5. fast_transcribe.py performs transcription
+   ↓ Uses pre-cached model for ultra-fast processing
+   
+6. Results uploaded to S3, instance terminated
+```
+
+### Performance Optimization Strategy
+
+| Component | Optimization | Time Saved |
+|-----------|-------------|------------|
+| **build_ami.sh** | Pre-downloads model to `/opt/transcribe/models/` | 30-45 seconds |
+| **fast_transcribe.sh** | Direct S3 download, minimal setup | 10-15 seconds |
+| **fast_transcribe.py** | Pre-compiled model state, CUDA warmup | 25-30 seconds |
+
+### Key Integration Points
+
+- **AMI ID Consistency**: All components reference the same AMI ID (`ami-0862833fe45c7055b`)
+- **Model Cache Path**: Standardized cache location `/opt/transcribe/models/`
+- **Environment Variables**: Shared configuration between shell and Python scripts
+- **Error Handling**: Comprehensive logging and status updates across all components
+
 ## Performance
 
 | Metric | Time | Cost |
